@@ -341,6 +341,7 @@ class TestDetectSkills:
             "skill-b",
         }
         assert [skill.local_only for skill in result.skills] == [True, False, False]
+        assert result.omitted_symlink_entries == 1
 
     def test_symlinked_skill_directory_marks_discovery_incomplete(self, tmp_path: Path) -> None:
         """Detection must not silently claim complete coverage through a directory symlink."""
@@ -363,6 +364,7 @@ class TestDetectSkills:
         assert result.complete is False
         assert result.limitations[0].reason_code == "read_error"
         assert result.limitations[0].resource == "multi_skill_symlinked_entry"
+        assert result.omitted_symlink_entries == 1
 
     def test_ignored_name_symlinks_do_not_mark_discovery_incomplete(self, tmp_path: Path) -> None:
         """Symlinks with intentionally ignored names are skipped, not recorded.
@@ -445,6 +447,7 @@ class TestDetectSkills:
         assert result.complete is False
         assert [lim.resource for lim in result.limitations] == ["multi_skill_symlinked_entry"]
         assert result.limitations[0].reason_code == "read_error"
+        assert result.omitted_symlink_entries == 1
 
     def test_symlinked_root_is_not_detected(self, tmp_path: Path) -> None:
         """Direct callers cannot use detection to inspect a symlinked root."""
