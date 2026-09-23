@@ -282,6 +282,8 @@ def detect_skills(directory: Path) -> MultiSkillDetectionResult:
         for entry in _bounded_scandir(directory, budget=budget):
             budget.check_runtime()
             child = Path(entry.path)
+            if entry.name in _SKIP_DIRS:
+                continue
             try:
                 if entry.is_symlink() or _is_link_or_junction(child):
                     if entry.name in _SKIP_DIRS:
@@ -304,8 +306,6 @@ def detect_skills(directory: Path) -> MultiSkillDetectionResult:
                     continue
             except OSError as exc:
                 raise _read_error("multi_skill_directory_entry") from exc
-            if entry.name in _SKIP_DIRS:
-                continue
 
             has_manifest = _has_skill_md(child, budget=budget)
             is_structured = False
