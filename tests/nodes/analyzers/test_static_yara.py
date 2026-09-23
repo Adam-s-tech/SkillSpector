@@ -609,6 +609,40 @@ class TestBuiltInMalwarePackaging:
         assert _has_rule(findings, "reverse_shell")
 
 
+# ── Built-in cryptominer rules ───────────────────────────────────────
+
+
+class TestBuiltInCryptominerRules:
+    """Regression coverage for crypto_coinjacking's $wasm_miner string.
+
+    Unbounded ``(mine|hash|crypto)`` matched inside unrelated identifiers
+    (``deteRMINE``) and against common, benign Web APIs/module names
+    (``crypto.getRandomValues``, ``hashmap``) that routinely appear near any
+    ``WebAssembly.instantiate`` call, firing a CRITICAL cryptojacking finding
+    on ordinary code.
+    """
+
+    def test_wasm_instantiate_with_unrelated_hash_call_is_not_coinjacking(self):
+        content = "WebAssembly.instantiate(bytes).then(r=>{ hashmap.set(r,1) })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert not _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_web_crypto_api_is_not_coinjacking(self):
+        content = "WebAssembly.instantiate(bytes).then(r=>{ crypto.getRandomValues(buf) })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert not _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_mid_word_mine_is_not_coinjacking(self):
+        content = "WebAssembly.instantiate(bytes).then(r=>{ return determine(r) })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert not _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_literal_miner_call_is_coinjacking(self):
+        content = "WebAssembly.instantiate(minerWasm).then(function(m){ m.exports.mine(); })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+
 # ── Built-in agent skill rules ────────────────────────────────────────
 
 
