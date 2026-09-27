@@ -2062,6 +2062,13 @@ class TestSupplyChainDependencies:
         assert len(sc6) >= 1
         assert "requests" in sc6[0].message
 
+    def test_sc6_known_legit_neighbours_not_flagged(self) -> None:
+        pypi = _analyze_deps("psycopg==3.2.0\npynacl==1.5.0\n", "requirements.txt")
+        assert [f for f in pypi if f.rule_id == "SC6"] == []
+        content = '{"dependencies": {"preact": "10.0.0", "gaxios": "6.0.0"}}'
+        npm = _analyze_deps(content, "package.json")
+        assert [f for f in npm if f.rule_id == "SC6"] == []
+
     def test_sc6_typosquat_npm(self) -> None:
         content = '{\n  "dependencies": {\n    "expreess": "4.18.0"\n  }\n}'
         sc6 = [f for f in _analyze_deps(content, "package.json") if f.rule_id == "SC6"]
@@ -2659,6 +2666,78 @@ class TestSupplyChainHelpers:
         self, package: str, popular: set[str]
     ) -> None:
         assert sc_mod._is_typosquat(package, popular) is None
+
+    @staticmethod
+    def _sc6(package: str, ecosystem: str) -> str | None:
+        if ecosystem == "pypi":
+            return sc_mod._is_typosquat(
+                package,
+                sc_mod._POPULAR_PYPI,
+                known_legit=sc_mod._KNOWN_LEGIT_PYPI,
+                pep503=True,
+            )
+        return sc_mod._is_typosquat(
+            package, sc_mod._POPULAR_NPM, known_legit=sc_mod._KNOWN_LEGIT_NPM
+        )
+
+    def test_osa_distance_counts_adjacent_swap_once(self) -> None:
+        assert sc_mod._osa_distance("recat", "react") == 1
+        assert sc_mod._osa_distance("requests", "requests") == 0
+        assert sc_mod._osa_distance("reqeuts", "requests") == 2
+        # Plain Levenshtein still counts the swap as two edits.
+        assert sc_mod._edit_distance("recat", "react") == 2
+
+    @pytest.mark.parametrize(
+        "package,ecosystem,expected",
+        [
+            pytest.param("recat", "npm", "react", id="short_swap_react"),
+            pytest.param("axois", "npm", "axios", id="short_swap_axios"),
+            pytest.param("electorn", "npm", "electron", id="electron"),
+            pytest.param("ethres", "npm", "ethers", id="ethers"),
+            pytest.param("crossenv", "npm", "cross-env", id="cross_env"),
+            pytest.param("discordjs", "npm", "discord.js", id="npm_dot_is_distinct"),
+            pytest.param("colourama", "pypi", "colorama", id="colorama"),
+            pytest.param("python-dotnev", "pypi", "python-dotenv", id="python_dotenv"),
+            pytest.param("pycryptodom", "pypi", "pycryptodome", id="pycryptodome"),
+        ],
+    )
+    def test_is_typosquat_detects_known_patterns(
+        self, package: str, ecosystem: str, expected: str
+    ) -> None:
+        assert self._sc6(package, ecosystem) == expected
+
+    @pytest.mark.parametrize(
+        "package,ecosystem",
+        [
+            pytest.param("pynacl", "pypi", id="pynacl"),
+            pytest.param("psycopg", "pypi", id="psycopg"),
+            pytest.param("pipx", "pypi", id="pipx"),
+            pytest.param("boto", "pypi", id="boto"),
+            pytest.param("pycryptodomex", "pypi", id="pycryptodomex"),
+            pytest.param("gaxios", "npm", id="gaxios"),
+            pytest.param("preact", "npm", id="preact"),
+            pytest.param("cypress", "npm", id="cypress"),
+            pytest.param("nuxt", "npm", id="nuxt"),
+            pytest.param("tether", "npm", id="tether"),
+        ],
+    )
+    def test_is_typosquat_known_legit_not_flagged(self, package: str, ecosystem: str) -> None:
+        assert self._sc6(package, ecosystem) is None
+
+    def test_is_typosquat_known_legit_is_needed(self) -> None:
+        # Without the list, an established package collides with a popular one.
+        assert sc_mod._is_typosquat("pynacl", sc_mod._POPULAR_PYPI) == "pyyaml"
+
+    @pytest.mark.parametrize("package", ["discord-py", "discord_py", "Discord.Py"])
+    def test_is_typosquat_pep503_equivalent_not_flagged(self, package: str) -> None:
+        assert self._sc6(package, "pypi") is None
+
+    def test_known_legit_disjoint_from_popular(self) -> None:
+        for popular, legit in (
+            (sc_mod._POPULAR_PYPI, sc_mod._KNOWN_LEGIT_PYPI),
+            (sc_mod._POPULAR_NPM, sc_mod._KNOWN_LEGIT_NPM),
+        ):
+            assert not ({n.lower() for n in popular} & {n.lower() for n in legit})
 
     def test_is_typosquat_too_distant_returns_none(self) -> None:
         assert sc_mod._is_typosquat("completely_different", {"requests"}) is None
