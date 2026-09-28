@@ -637,6 +637,27 @@ class TestBuiltInCryptominerRules:
         findings = _run_builtin(content, "loader.js")
         assert not _has_rule(findings, "crypto_coinjacking")
 
+    def test_wasm_instantiate_with_text_mining_prose_is_not_coinjacking(self):
+        """`mining` as English prose must not fire; only a mining call does."""
+        content = (
+            "WebAssembly.instantiate(bytes).then(m=>runAnalytics(m));"
+            " // helpers for text mining\n"
+        )
+        findings = _run_builtin(content, "loader.js")
+        assert not _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_start_mining_call_is_coinjacking(self):
+        """`startMining(` is a mining call even though `Mining` is mid-identifier."""
+        content = "WebAssembly.instantiate(w).then(m=>{ m.exports.startMining(pool) })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_capitalised_miner_is_coinjacking(self):
+        """Case must not matter: `new Miner(` is the common CoinHive-era shape."""
+        content = "WebAssembly.instantiate(w).then(m=>{ var x = new Miner(siteKey) })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
     def test_wasm_instantiate_with_literal_miner_call_is_coinjacking(self):
         content = "WebAssembly.instantiate(minerWasm).then(function(m){ m.exports.mine(); })\n"
         findings = _run_builtin(content, "loader.js")
