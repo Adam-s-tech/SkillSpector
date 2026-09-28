@@ -572,7 +572,16 @@ def _reference_coverage_findings(
         inventory_item = inventory.get(target_path)
         disposition = str(inventory_item.get("disposition", "")) if inventory_item else ""
         reference_disposition = str(reference.get("disposition", ""))
-        target_events = events_by_path.get(target_path, [])
+        # A missing reference is recorded on the file that mentions it, but it
+        # describes a path the bundle does not carry, not bytes of that file
+        # left uninspected. The completeness ledger still reports it; it must
+        # not turn a reference to the mentioning file (such as `SKILL.md`)
+        # into AE1.
+        target_events = [
+            event
+            for event in events_by_path.get(target_path, [])
+            if event.get("reason_code") != LedgerReason.REFERENCE_MISSING
+        ]
         incomplete_dispositions = {str(event.get("outcome", "")) for event in target_events} | {
             disposition,
             reference_disposition,

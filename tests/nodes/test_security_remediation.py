@@ -1732,6 +1732,42 @@ def test_unresolved_primary_reference_blocks_complete_verdict(tmp_path: Path, ca
     assert result["risk_recommendation"] != "SAFE"
 
 
+def test_missing_reference_does_not_turn_self_reference_into_ae1(tmp_path: Path) -> None:
+    references = tmp_path / "references"
+    references.mkdir()
+    (references / "guide.md").write_text("# Guide\n\nPlain guide text.\n", encoding="utf-8")
+    (tmp_path / "SKILL.md").write_text(
+        "# Skill\n\n"
+        "Read [the guide](references/guide.md).\n"
+        "Other skills keep templates under `templates/config.yaml`.\n"
+        "Keep `SKILL.md` under 500 lines.\n",
+        encoding="utf-8",
+    )
+
+    result = graph.invoke(
+        {
+            "input_path": str(tmp_path),
+            "output_format": "json",
+            "use_llm": False,
+        }
+    )
+
+    statuses = Counter(
+        (reference["status"], reference["target_path"])
+        for reference in result["artifact_references"]
+    )
+    assert statuses[("resolved", "SKILL.md")] == 1
+    assert statuses[("missing", None)] == 1
+    assert not any(finding.rule_id == "AE1" for finding in result["filtered_findings"])
+    # The missing path is still reported as a completeness caveat.
+    assert [
+        (row["path"], row["reason_code"])
+        for row in result["analysis_completeness"]["ledger_exceptions"]
+    ] == [("SKILL.md", "reference_missing")]
+    assert result["analysis_completeness"]["is_complete"] is False
+    assert result["risk_recommendation"] == "CAUTION"
+
+
 @pytest.mark.asyncio
 async def test_unresolved_reference_caveat_does_not_block_mcp_install(tmp_path: Path) -> None:
     """A reference caveat hides no bytes, so it must not fail safe_to_install.

@@ -1907,6 +1907,66 @@ def test_unresolved_reference_does_not_synthesize_ae1(status: str) -> None:
     assert result["effective_finding_ids"] == []
 
 
+def _self_reference_state(*extra_events: dict[str, object]) -> SkillspectorState:
+    """SKILL.md mentions a missing path and then references itself."""
+    return {
+        "artifact_inventory": [{"path": "SKILL.md", "disposition": "analyzed"}],
+        "artifact_references": [
+            {
+                "source_path": "SKILL.md",
+                "line": 3,
+                "evidence": "templates/config.yaml",
+                "target_path": None,
+                "status": "missing",
+            },
+            {
+                "source_path": "SKILL.md",
+                "line": 5,
+                "evidence": "Keep `SKILL.md` under 500 lines.",
+                "target_path": "SKILL.md",
+                "status": "resolved",
+                "disposition": "analyzed",
+            },
+        ],
+        "inspection_ledger": [
+            ledger_event(
+                outcome=LedgerOutcome.PARTIAL,
+                record_type=LedgerRecordType.SYSTEM,
+                phase="reference_resolution",
+                path="SKILL.md",
+                start_line=3,
+                end_line=3,
+                reason=LedgerReason.REFERENCE_MISSING,
+            ),
+            *extra_events,
+        ],
+    }
+
+
+def test_missing_reference_does_not_make_its_source_an_ae1_target() -> None:
+    assert finalizer_module._reference_coverage_findings(_self_reference_state()) == []
+
+
+def test_self_reference_ae1_still_reports_source_content_limitations() -> None:
+    findings = finalizer_module._reference_coverage_findings(
+        _self_reference_state(
+            ledger_event(
+                outcome=LedgerOutcome.PARTIAL,
+                phase="static",
+                analyzer_id="static_patterns_tool_misuse",
+                path="SKILL.md",
+                reason=LedgerReason.STATIC_PARSE_LIMIT,
+                start_line=4,
+                end_line=4,
+            )
+        )
+    )
+
+    assert [(finding.rule_id, finding.start_line) for finding in findings] == [("AE1", 5)]
+    reasons = findings[0].to_dict()["evidence"]["reasons"]
+    assert [row["reason_code"] for row in reasons] == ["static_parse_limit"]
+
+
 def test_guard_analyzer_node_converts_unexpected_exception_to_fatal_facts() -> None:
     def broken_node(_state: SkillspectorState) -> AnalyzerNodeResponse:
         raise RuntimeError("provider detail must remain private")
