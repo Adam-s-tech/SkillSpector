@@ -120,6 +120,27 @@ def test_rp1_docker_unpinned():
     assert len(rp1) >= 1
 
 
+def test_rp1_docker_credentials_are_redacted_in_reports():
+    result = node(
+        _state(
+            file_cache={
+                "setup.sh": "docker pull https://deploy:s3cret@registry.example.com/team/image"
+            }
+        )
+    )
+    rp1 = [f for f in result["findings"] if f.rule_id == "RP1"]
+    assert len(rp1) == 1
+
+    json_body = report({"filtered_findings": rp1, "output_format": "json"})["report_body"]
+    issue = json.loads(json_body)["issues"][0]
+    assert "https://***@registry.example.com" in issue["pattern"]
+    assert "https://***@registry.example.com" in issue["finding"]
+    sarif_body = report({"filtered_findings": rp1, "output_format": "sarif"})["report_body"]
+    for body in (json_body, sarif_body):
+        assert "deploy:s3cret" not in body
+        assert "s3cret" not in body
+
+
 def test_rp1_multiple_patterns():
     """Multiple unpinned references produce multiple RP1 findings."""
     result = node(
