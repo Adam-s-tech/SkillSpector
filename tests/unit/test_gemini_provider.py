@@ -17,12 +17,14 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import google.auth
 import pytest
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
+from google.auth.transport.requests import Request
 from langchain_openai import ChatOpenAI
 from typer.testing import CliRunner
 
@@ -251,14 +253,75 @@ class TestGeminiProvider:
         """A caller's None timeout still respects an active auth deadline."""
         import skillspector.providers.gemini.provider as gemini_provider
 
-        request = MagicMock()
-
-        monkeypatch.setattr(gemini_provider, "Request", lambda: request)
         monkeypatch.setattr(gemini_provider, "monotonic", lambda: 10.0)
+        request = gemini_provider._bounded_request(15.0)
 
-        gemini_provider._bounded_request(15.0)("https://example.invalid", timeout=None)
+        assert isinstance(request, Request)
+        assert request.session is not None
 
-        assert request.call_args.kwargs["timeout"] == 5.0
+        session = MagicMock()
+        request.session = session
+        request("https://example.invalid", timeout=None)
+
+        assert session.request.call_args.kwargs["timeout"] == 5.0
+
+    def test_credentials_discovery_timeout_discards_late_adc_result(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Blocked ADC discovery returns on deadline and cannot populate the cache later."""
+        import skillspector.providers.gemini.provider as gemini_provider
+
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project-123")
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        workers: list[threading.Thread] = []
+        real_thread = threading.Thread
+        late_credentials = MockCredentials(token="late-token", valid=True)
+        on_time_credentials = MockCredentials(token="on-time-token", valid=True)
+        default_calls = 0
+
+        def record_thread(*args: object, **kwargs: object) -> threading.Thread:
+            worker = real_thread(*args, **kwargs)
+            workers.append(worker)
+            return worker
+
+        def default(*, scopes: list[str], request: object) -> tuple[MockCredentials, str]:
+            nonlocal default_calls
+            default_calls += 1
+            if default_calls == 1:
+                entered.set()
+                try:
+                    release.wait(timeout=1.0)
+                finally:
+                    finished.set()
+                return late_credentials, "test-project-123"
+            return on_time_credentials, "test-project-123"
+
+        monkeypatch.setattr(gemini_provider.threading, "Thread", record_thread)
+        monkeypatch.setattr(google.auth, "default", default)
+
+        try:
+            with pytest.raises(TimeoutError, match="Gemini authentication timed out"):
+                GeminiProvider().resolve_credentials(timeout=0.01)
+            assert entered.is_set()
+            assert not finished.is_set()
+        finally:
+            release.set()
+            for worker in workers:
+                worker.join(timeout=2.0)
+
+        assert len(workers) == 1
+        assert not workers[0].is_alive()
+        assert finished.is_set()
+        assert gemini_provider._CACHED_CREDENTIALS is None
+
+        assert GeminiProvider().resolve_credentials() == (
+            "on-time-token",
+            get_base_url("test-project-123", "global"),
+        )
+        assert default_calls == 2
+        assert gemini_provider._CACHED_CREDENTIALS is on_time_credentials
 
     def test_credentials_skip_adc_when_lock_acquire_exhausts_deadline(
         self, monkeypatch: pytest.MonkeyPatch
@@ -313,10 +376,13 @@ class TestGeminiProvider:
             def __exit__(self, *_args: object) -> None:
                 self.release()
 
-        class _Request:
-            def __call__(self, *_args: object, timeout: float = 120, **_kwargs: object) -> object:
+        class _Session:
+            def request(self, *_args: object, timeout: float = 120, **_kwargs: object) -> MagicMock:
                 observed["request_timeout"] = timeout
-                return object()
+                return MagicMock()
+
+            def close(self) -> None:
+                return None
 
         class _Credentials(MockCredentials):
             def refresh(self, request: object) -> None:
@@ -327,12 +393,12 @@ class TestGeminiProvider:
 
         def _default(*, scopes: list[str], request: object) -> tuple[MockCredentials, str]:
             observed["default_request"] = request
+            request.session = _Session()  # type: ignore[attr-defined]
             return creds, "test-project-123"
 
         model_factory = MagicMock(return_value=object())
         clock = iter(float(i) for i in range(20))
         monkeypatch.setattr(gemini_provider, "_AUTH_LOCK", _Lock())
-        monkeypatch.setattr(gemini_provider, "Request", _Request)
         monkeypatch.setattr(gemini_provider, "monotonic", lambda: next(clock), raising=False)
         monkeypatch.setattr(google.auth, "default", _default)
         monkeypatch.setattr(gemini_provider, "create_openai_compatible_chat_model", model_factory)

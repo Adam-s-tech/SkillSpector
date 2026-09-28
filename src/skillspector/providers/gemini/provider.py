@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import re
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from time import monotonic
 from typing import ClassVar
@@ -114,12 +115,23 @@ def _remaining_seconds(deadline: float | None) -> float | None:
     return remaining
 
 
-def _bounded_request(deadline: float | None):
-    """Build one ADC request callable that caps HTTP timeouts at *deadline*."""
-    request = Request()
+class _BoundedRequest(Request):
+    """Google-auth request transport capped by a shared deadline."""
 
-    def call(*args: object, timeout: float | None = 120, **kwargs: object) -> object:
-        remaining = _remaining_seconds(deadline)
+    def __init__(self, deadline: float | None) -> None:
+        super().__init__()
+        self._deadline = deadline
+
+    def __call__(
+        self,
+        url: str,
+        method: str = "GET",
+        body: bytes | None = None,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = 120,
+        **kwargs: object,
+    ) -> object:
+        remaining = _remaining_seconds(self._deadline)
         request_timeout = (
             timeout
             if remaining is None
@@ -127,9 +139,42 @@ def _bounded_request(deadline: float | None):
             if timeout is None
             else min(timeout, remaining)
         )
-        return request(*args, timeout=request_timeout, **kwargs)
+        return super().__call__(url, method, body, headers, request_timeout, **kwargs)
 
-    return call
+
+def _bounded_request(deadline: float | None) -> _BoundedRequest:
+    """Build one ADC request transport that caps HTTP timeouts at *deadline*."""
+    return _BoundedRequest(deadline)
+
+
+def _discover_default_credentials(
+    deadline: float | None, request: Request
+) -> tuple[google.auth.credentials.Credentials, str | None]:
+    """Run ADC discovery within *deadline* without exposing a late result."""
+    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+    if deadline is None:
+        return google.auth.default(scopes=scopes, request=request)
+
+    completed = threading.Event()
+    results: list[tuple[google.auth.credentials.Credentials, str | None]] = []
+    errors: list[Exception] = []
+
+    def discover() -> None:
+        try:
+            results.append(google.auth.default(scopes=scopes, request=request))
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            completed.set()
+
+    worker = threading.Thread(target=discover, daemon=True)
+    worker.start()
+    if not completed.wait(timeout=_remaining_seconds(deadline)):
+        raise TimeoutError("Gemini authentication timed out.")
+    _remaining_seconds(deadline)
+    if errors:
+        raise errors[0]
+    return results[0]
 
 
 def _get_credentials(deadline: float | None) -> str:
@@ -150,9 +195,7 @@ def _get_credentials(deadline: float | None) -> str:
         request = _bounded_request(deadline)
         if _CACHED_CREDENTIALS is None:
             try:
-                creds, _ = google.auth.default(
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"], request=request
-                )
+                creds, _ = _discover_default_credentials(deadline, request)
                 _CACHED_CREDENTIALS = creds
             except TimeoutError:
                 raise

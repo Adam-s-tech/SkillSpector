@@ -337,7 +337,9 @@ def analyze(
 
     for pattern_source, confidence in P1_PATTERNS:
         runtime_check()
-        for match in re.finditer(pattern_source, content, re.IGNORECASE | re.MULTILINE):
+        for match in static_runner.iter_paragraph_matches(
+            pattern_source, content, re.IGNORECASE | re.MULTILINE
+        ):
             runtime_check()
             findings.append(
                 AnalyzerFinding(
@@ -352,7 +354,7 @@ def analyze(
                     complete_match=match.group(0),
                 )
             )
-    if file_type in ("markdown", "other"):
+    if file_type in ("markdown", "perl", "other"):
         for pattern_source, confidence in P2_PATTERNS:
             for match in _p2_pattern_matches(content, pattern_source, check_runtime):
                 runtime_check()
@@ -377,7 +379,7 @@ def analyze(
     for rule_id, message, severity, patterns in prompt_rules:
         for compiled_pattern, confidence in patterns:
             runtime_check()
-            for match in compiled_pattern.finditer(content):
+            for match in static_runner.iter_paragraph_matches(compiled_pattern, content):
                 runtime_check()
                 source_start = match.start()
                 source_end = match.end()
@@ -404,7 +406,9 @@ def analyze(
         for rule_id, message, severity, patterns in prompt_rules:
             for compiled_pattern, confidence in patterns:
                 runtime_check()
-                for match in compiled_pattern.finditer(prompt_view.text):
+                for match in static_runner.iter_paragraph_matches(
+                    compiled_pattern, prompt_view.text
+                ):
                     runtime_check()
                     source_start = prompt_view.source_offset(match.start())
                     source_end = prompt_view.source_offset(max(match.start(), match.end() - 1)) + 1
