@@ -1892,6 +1892,83 @@ def test_recursive_symlinked_skills_are_reported_as_omitted(
     }
 
 
+def _symlink_only_root(tmp_path: Path, *, with_ignored_name: bool) -> Path:
+    """Build a root holding no real skill, only symlinked children."""
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "SKILL.md").write_text("---\nname: linked\n---\n# benign skill\n", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    try:
+        (root / "linked-skill").symlink_to(external, target_is_directory=True)
+        if with_ignored_name:
+            (root / "node_modules").symlink_to(external, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not supported on this filesystem")
+    return root
+
+
+def test_recursive_symlink_only_root_fails_strict_gate(tmp_path: Path) -> None:
+    """Zero real children with one eligible link stays partial end to end.
+
+    The fallback dispatch bypasses `_scan_multi_skill`, so this covers the
+    CLI path the direct aggregate test cannot reach: incomplete JSON and a
+    failing `--fail-on-incomplete` gate with no findings to blame.
+    """
+    root = _symlink_only_root(tmp_path, with_ignored_name=False)
+    output = tmp_path / "report.json"
+
+    result = runner.invoke(
+        app,
+        ["scan", str(root), "--recursive", "--format", "json", "--no-llm", "-o", str(output)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["analysis_completeness"]["is_complete"] is False
+    assert payload["analysis_completeness"]["status"] == "partial"
+
+    strict = runner.invoke(
+        app,
+        [
+            "scan",
+            str(root),
+            "--recursive",
+            "--format",
+            "json",
+            "--no-llm",
+            "-o",
+            str(tmp_path / "strict.json"),
+            "--fail-on-incomplete",
+        ],
+    )
+    assert strict.exit_code == 1
+
+
+def test_recursive_symlink_only_root_keeps_ignored_names_exempt(
+    tmp_path: Path,
+) -> None:
+    """An ignored-name link beside an eligible one adds no discovery gap."""
+    root = _symlink_only_root(tmp_path, with_ignored_name=True)
+    output = tmp_path / "report.json"
+
+    runner.invoke(
+        app,
+        ["scan", str(root), "--recursive", "--format", "json", "--no-llm", "-o", str(output)],
+    )
+
+    assert output.exists()
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["analysis_completeness"]["is_complete"] is False
+    discovery = [
+        event
+        for event in payload["analysis_completeness"]["ledger_exceptions"]
+        if event["phase"] == "multi_skill_discovery"
+    ]
+    assert len(discovery) == 1
+    assert discovery[0]["reason_code"] == "read_error"
+
+
 def test_recursive_json_bounds_the_final_serialized_document(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
