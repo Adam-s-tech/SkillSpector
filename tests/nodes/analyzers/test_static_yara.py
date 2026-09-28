@@ -310,6 +310,99 @@ def _perl_helper_exec_nonshell_prefix_fixture() -> str:
     ).decode()
 
 
+def _python_dup2_local_open_fixture() -> str:
+    """A client that closes its socket, opens an unrelated local file, and
+    ``dup2``s *that* file's descriptor onto stdin before running a shell.
+
+    Requiring only ``dup2(..., 0)`` accepted redirection from any file
+    object's descriptor, not specifically the connected socket's — this
+    ``commands = open("local.commands")`` source is a local file, never the
+    (already closed) socket, so no remote command channel exists. Excluding
+    ``$python_socket`` matches whose span contains a local ``= open(``
+    assignment closes this gap.
+    """
+    return base64.b64decode(
+        "cyA9IHNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsIHNvY2tldC5TT0NLX1NUUkVBTSkK"
+        "cy5jb25uZWN0KCgiMTAuMC4wLjEiLCA0NDQ0KSkKcy5jbG9zZSgpCmNvbW1hbmRzID0gb3Bl"
+        "bigibG9jYWwuY29tbWFuZHMiKQpvcy5kdXAyKGNvbW1hbmRzLmZpbGVubygpLCAwKQpzdWJw"
+        "cm9jZXNzLnJ1bihbIi9iaW4vc2giXSkK"
+    ).decode()
+
+
+def _python_stdin_kwarg_local_open_fixture() -> str:
+    """The ``stdin=`` keyword-argument analogue of
+    `_python_dup2_local_open_fixture`: the redirected descriptor comes from a
+    local ``open()`` call, never the socket, so this must NOT match either.
+    """
+    return base64.b64decode(
+        "aW1wb3J0IHNvY2tldCwgc3VicHJvY2VzcwpzID0gc29ja2V0LnNvY2tldChzb2NrZXQuQUZf"
+        "SU5FVCwgc29ja2V0LlNPQ0tfU1RSRUFNKQpzLmNvbm5lY3QoKCIxMC4wLjAuMSIsIDQ0NDQp"
+        "KQpjb21tYW5kcyA9IG9wZW4oImxvY2FsLmNvbW1hbmRzIikKc3VicHJvY2Vzcy5jYWxsKFsi"
+        "L2Jpbi9zaCJdLCBzdGRpbj1jb21tYW5kcy5maWxlbm8oKSkK"
+    ).decode()
+
+
+def _python_dup2_sh_helper_hyphen_fixture() -> str:
+    """``os.dup2`` onto stdin followed by a non-shell helper whose name has
+    ``sh`` as a mere prefix before a hyphen (``sh-helper``), not a shell
+    executable.
+
+    ``\\b`` transitions on any non-word character, and ``-`` is non-word, so
+    the shell-name alternatives matched ``sh`` inside ``sh-helper`` the same
+    way they previously matched it inside ``sha256sum``.
+    """
+    return base64.b64decode(
+        "aW1wb3J0IHNvY2tldCwgb3MsIHN1YnByb2Nlc3MKcyA9IHNvY2tldC5zb2NrZXQoc29ja2V0"
+        "LkFGX0lORVQsIHNvY2tldC5TT0NLX1NUUkVBTSkKcy5jb25uZWN0KCgiMTAuMC4wLjEiLCA0"
+        "NDQ0KSkKb3MuZHVwMihzLmZpbGVubygpLCAwKQpzdWJwcm9jZXNzLnJ1bihbInNoLWhlbHBl"
+        "ciJdKQo="
+    ).decode()
+
+
+def _perl_local_input_no_amp_fixture() -> str:
+    """Redirects Perl's ``STDIN`` from a local file path, not the socket, then
+    ``exec``s a shell.
+
+    The dup-onto-a-handle idiom (``open(STDIN, "<&SOCKET")``) always uses the
+    ``&`` fd-duplication form; plain filename opens (``open(STDIN, "<",
+    "local.commands")``) read from local disk instead, so this must NOT
+    match ``reverse_shell``/``$perl_socket``.
+    """
+    return base64.b64decode(
+        "dXNlIFNvY2tldDsKc29ja2V0KFNPQ0tFVCwgUEZfSU5FVCwgU09DS19TVFJFQU0sIGdldHBy"
+        "b3RvYnluYW1lKCJ0Y3AiKSk7CmNvbm5lY3QoU09DS0VULCBzb2NrYWRkcl9pbigkcG9ydCwg"
+        "aW5ldF9hdG9uKCRpcCkpKTsKb3BlbihTVERJTiwgIjwiLCAibG9jYWwuY29tbWFuZHMiKTsK"
+        "ZXhlYygiL2Jpbi9zaCIpOwo="
+    ).decode()
+
+
+def _perl_local_output_no_amp_fixture() -> str:
+    """The ``STDOUT`` analogue of `_perl_local_input_no_amp_fixture`: output
+    redirected to a local log file, not the socket, must also NOT match.
+    """
+    return base64.b64decode(
+        "dXNlIFNvY2tldDsKc29ja2V0KFNPQ0tFVCwgUEZfSU5FVCwgU09DS19TVFJFQU0sIGdldHBy"
+        "b3RvYnluYW1lKCJ0Y3AiKSk7CmNvbm5lY3QoU09DS0VULCBzb2NrYWRkcl9pbigkcG9ydCwg"
+        "aW5ldF9hdG9uKCRpcCkpKTsKb3BlbihTVERPVVQsICI+IiwgImxvY2FsLmxvZyIpOwpleGVj"
+        "KCIvYmluL3NoIik7Cg=="
+    ).decode()
+
+
+def _perl_sh_helper_hyphen_fixture() -> str:
+    """Redirects ``STDIN`` onto the socket, then ``exec``s ``sh-helper`` — a
+    non-shell helper whose name merely has ``sh`` as a prefix before a
+    hyphen.
+
+    Mirrors `_python_dup2_sh_helper_hyphen_fixture`'s boundary gap for Perl.
+    """
+    return base64.b64decode(
+        "dXNlIFNvY2tldDsKc29ja2V0KFNPQ0tFVCwgUEZfSU5FVCwgU09DS19TVFJFQU0sIGdldHBy"
+        "b3RvYnluYW1lKCJ0Y3AiKSk7CmNvbm5lY3QoU09DS0VULCBzb2NrYWRkcl9pbigkcG9ydCwg"
+        "aW5ldF9hdG9uKCRpcCkpKTsKb3BlbihTVERJTiwgIjwmU09DS0VUIik7CmV4ZWMoInNoLWhl"
+        "bHBlciIpOwo="
+    ).decode()
+
+
 def _has_rule(findings: list, rule_name: str) -> bool:
     """Return True when a finding message references a specific YARA rule."""
     return any(rule_name in f.message for f in findings)
@@ -1007,6 +1100,75 @@ class TestBuiltInMalwarePackaging:
         """
         findings = _run_builtin(
             _perl_helper_exec_nonshell_prefix_fixture(),
+            "scripts/report.pl",
+        )
+        assert not _has_rule(findings, "reverse_shell")
+
+    def test_reverse_shell_rule_does_not_match_python_dup2_local_open(self):
+        """``dup2`` redirection sourced from a local ``open()`` call, not the
+        (already closed) socket, must NOT satisfy `$python_socket`. See
+        `_python_dup2_local_open_fixture`: this must NOT match.
+        """
+        findings = _run_builtin(
+            _python_dup2_local_open_fixture(),
+            "scripts/backdoor.py",
+        )
+        assert not _has_rule(findings, "reverse_shell")
+
+    def test_reverse_shell_rule_does_not_match_python_stdin_kwarg_local_open(self):
+        """The ``stdin=`` keyword-argument form of redirection sourced from a
+        local ``open()`` call must NOT satisfy `$python_socket` either. See
+        `_python_stdin_kwarg_local_open_fixture`: this must NOT match.
+        """
+        findings = _run_builtin(
+            _python_stdin_kwarg_local_open_fixture(),
+            "scripts/backdoor.py",
+        )
+        assert not _has_rule(findings, "reverse_shell")
+
+    def test_reverse_shell_rule_does_not_match_python_dup2_sh_helper_hyphen(self):
+        """A non-shell helper whose name has ``sh`` as a prefix before a
+        hyphen (``sh-helper``) must NOT satisfy the shell-execution marker —
+        ``-`` is a non-word character, so a bare ``\\b`` boundary after the
+        shell name is not a complete token boundary. See
+        `_python_dup2_sh_helper_hyphen_fixture`: this must NOT match.
+        """
+        findings = _run_builtin(
+            _python_dup2_sh_helper_hyphen_fixture(),
+            "scripts/report.py",
+        )
+        assert not _has_rule(findings, "reverse_shell")
+
+    def test_reverse_shell_rule_does_not_match_perl_local_input_no_amp(self):
+        """Perl's ``STDIN`` redirected from a local file path (no ``&``
+        fd-duplication) must NOT satisfy `$perl_socket`. See
+        `_perl_local_input_no_amp_fixture`: this must NOT match.
+        """
+        findings = _run_builtin(
+            _perl_local_input_no_amp_fixture(),
+            "scripts/backdoor.pl",
+        )
+        assert not _has_rule(findings, "reverse_shell")
+
+    def test_reverse_shell_rule_does_not_match_perl_local_output_no_amp(self):
+        """Perl's ``STDOUT`` redirected to a local file path (no ``&``
+        fd-duplication) must NOT satisfy `$perl_socket`. See
+        `_perl_local_output_no_amp_fixture`: this must NOT match.
+        """
+        findings = _run_builtin(
+            _perl_local_output_no_amp_fixture(),
+            "scripts/backdoor.pl",
+        )
+        assert not _has_rule(findings, "reverse_shell")
+
+    def test_reverse_shell_rule_does_not_match_perl_sh_helper_hyphen(self):
+        """A non-shell helper whose name has ``sh`` as a prefix before a
+        hyphen (``sh-helper``) must NOT satisfy `$perl_socket`'s
+        shell-execution marker. See `_perl_sh_helper_hyphen_fixture`: this
+        must NOT match.
+        """
+        findings = _run_builtin(
+            _perl_sh_helper_hyphen_fixture(),
             "scripts/report.pl",
         )
         assert not _has_rule(findings, "reverse_shell")
