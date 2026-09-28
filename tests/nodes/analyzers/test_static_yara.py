@@ -621,6 +621,89 @@ class TestBuiltInMalwarePackaging:
         assert _has_rule(findings, "reverse_shell")
 
 
+# ── Built-in cryptominer rules ───────────────────────────────────────
+
+
+class TestBuiltInCryptominerRules:
+    """Regression coverage for crypto_coinjacking's $wasm_miner string.
+
+    Unbounded ``(mine|hash|crypto)`` matched inside unrelated identifiers
+    (``deteRMINE``) and against common, benign Web APIs/module names
+    (``crypto.getRandomValues``, ``hashmap``) that routinely appear near any
+    ``WebAssembly.instantiate`` call, firing a CRITICAL cryptojacking finding
+    on ordinary code.
+    """
+
+    def test_wasm_instantiate_with_unrelated_hash_call_is_not_coinjacking(self):
+        content = "WebAssembly.instantiate(bytes).then(r=>{ hashmap.set(r,1) })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert not _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_web_crypto_api_is_not_coinjacking(self):
+        content = "WebAssembly.instantiate(bytes).then(r=>{ crypto.getRandomValues(buf) })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert not _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_mid_word_mine_is_not_coinjacking(self):
+        content = "WebAssembly.instantiate(bytes).then(r=>{ return determine(r) })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert not _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_text_mining_prose_is_not_coinjacking(self):
+        """`mining` as English prose must not fire; only a mining call does."""
+        content = (
+            "WebAssembly.instantiate(bytes).then(m=>runAnalytics(m)); // helpers for text mining\n"
+        )
+        findings = _run_builtin(content, "loader.js")
+        assert not _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_start_mining_call_is_coinjacking(self):
+        """`startMining(` is a mining call even though `Mining` is mid-identifier."""
+        content = "WebAssembly.instantiate(w).then(m=>{ m.exports.startMining(pool) })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_capitalised_miner_is_coinjacking(self):
+        """Case must not matter: `new Miner(` is the common CoinHive-era shape."""
+        content = "WebAssembly.instantiate(w).then(m=>{ var x = new Miner(siteKey) })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_literal_miner_call_is_coinjacking(self):
+        content = "WebAssembly.instantiate(minerWasm).then(function(m){ m.exports.mine(); })\n"
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_cryptonight_glue_is_coinjacking(self):
+        content = (
+            "WebAssembly.instantiate(wasmBinary,info);"
+            "var _cryptonight_hash=Module._cryptonight_hash=function(){};\n"
+        )
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_hash_cn_cwrap_is_coinjacking(self):
+        content = 'WebAssembly.instantiate(x).then(()=>{ Module.cwrap("hash_cn", "number", ["number"]) })\n'
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_cryptonight_wasm_fetch_is_coinjacking(self):
+        content = (
+            'WebAssembly.instantiateStreaming(fetch("cryptonight.wasm"))'
+            ".then(o=>{ exports.cn_hash(blob,nonce++) })\n"
+        )
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_randomx_calculate_hash_is_coinjacking(self):
+        content = (
+            "WebAssembly.instantiate(randomxWasm)"
+            ".then(m=>m.instance.exports.randomx_calculate_hash(blob))\n"
+        )
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+
 # ── Built-in agent skill rules ────────────────────────────────────────
 
 
