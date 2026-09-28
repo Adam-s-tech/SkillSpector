@@ -514,6 +514,17 @@ class TestAnthropicProvider:
         assert isinstance(llm, ChatAnthropic)
         assert str(llm.anthropic_api_url).rstrip("/") == "http://localhost:8787"
 
+    def test_bearer_auth_scheme_sends_authorization_header(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "gateway-token")
+        monkeypatch.setenv("ANTHROPIC_AUTH_SCHEME", "bearer")
+        llm = AnthropicProvider().create_chat_model("claude-opus-4-6", max_tokens=123)
+        assert isinstance(llm, ChatAnthropic)
+        for client in (llm._client, llm._async_client):
+            assert client.default_headers["Authorization"] == "Bearer gateway-token"
+            assert "X-Api-Key" not in client.default_headers
+
     @pytest.mark.parametrize("effort", ["provider-specific-value"])
     def test_reasoning_effort_passthrough(
         self, monkeypatch: pytest.MonkeyPatch, effort: str
