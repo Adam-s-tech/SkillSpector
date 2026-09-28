@@ -1425,6 +1425,7 @@ def _parse_shell_command_word(
 ) -> _ShellCommandWord | None:
     runtime_check = check_runtime or (lambda: None)
     output: list[str] = []
+    wrapper_quote = _command_wrapper_quote(content, start) if content[start] in "$`" else None
     quote: str | None = None
     ansi_c_quote = False
     dynamic = False
@@ -1453,8 +1454,6 @@ def _parse_shell_command_word(
                 output.append(decoded)
                 continue
             elif quote == '"' and character == "$" and cursor + 1 < limit:
-                if owned_word_positions is not None:
-                    owned_word_positions.add(cursor)
                 inherited_quote_closed = [False]
                 if content[cursor + 1] == "(":
                     substitution_end = _skip_command_substitution(
@@ -1635,6 +1634,8 @@ def _parse_shell_command_word(
             cursor = substitution_end
             continue
         elif character in "'\"":
+            if character == wrapper_quote:
+                break
             quote = character
         elif character == "\\" and cursor + 1 < limit:
             if content[cursor + 1] == "\n":
@@ -1731,7 +1732,7 @@ def _has_shell_command_word_exhaustion(
 ) -> bool:
     """Find candidate command words whose deterministic parse hit a safety bound."""
     parsed_through = 0
-    # Completed words own their closing quotes and quoted expansion starts.
+    # Completed words own closing quotes, never executable expansion starts.
     # Inner commands remain independent candidates; never suppress their bodies.
     owned_word_positions: set[int] = set()
     parameter_end_cache: dict[int, _ParameterExpansionEnd] = {}
@@ -1804,7 +1805,9 @@ def _has_shell_command_word_exhaustion(
             if unresolved_end - start > _SHELL_COMMAND_WORD_CHARS:
                 return True
             continue
-        owned_word_positions.update(candidate_word_positions)
+        line_start = content.rfind("\n", 0, start) + 1
+        if not content[line_start:start].lstrip().startswith("#"):
+            owned_word_positions.update(candidate_word_positions)
         # Only executable nested substitutions retain independent command
         # positions. A plain dynamic data argument still owns its inner bytes;
         # revisiting those as commands would turn quoted printf data into code.

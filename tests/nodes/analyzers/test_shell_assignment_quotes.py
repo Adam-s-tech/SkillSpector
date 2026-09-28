@@ -39,3 +39,28 @@ def test_assignment_ownership_retains_nested_command_budget() -> None:
 def test_failed_word_parse_does_not_claim_following_command() -> None:
     source = 'Test-Path "$($_.FullName)\\cli-path"; $($CMD) -rf /'
     assert has_bounded_parse_exhaustion(source, lambda: None)
+
+
+@pytest.mark.parametrize(
+    "source", ['Run "$(resolve_tool) -rf /"', '# see "notes\n$(resolve_tool) -rf /\n# "']
+)
+def test_quoted_runtime_commands_keep_fail_closed_coverage(source: str) -> None:
+    from skillspector.inspection_ledger import LedgerOutcome, LedgerReason
+    from skillspector.nodes.analyzers import static_patterns_tool_misuse, static_runner
+
+    assert has_bounded_parse_exhaustion(source, lambda: None)
+    path = "script.sh" if source.startswith("#") else "SKILL.md"
+    result = static_runner.run_static_patterns_with_ledger(
+        {"components": [path], "local_file_cache": {path: source}, "file_cache": {path: source}},
+        [static_patterns_tool_misuse],
+    )
+    assert any(
+        e["outcome"] == LedgerOutcome.PARTIAL
+        and e["reason_code"] == LedgerReason.STATIC_PARSE_LIMIT
+        for e in result["inspection_ledger"]
+    )
+
+
+def test_non_shell_unclosed_assignment_remains_conservative() -> None:
+    source = 'name="value' + "\n" + "text " * 1200
+    assert has_bounded_parse_exhaustion(source, lambda: None)
