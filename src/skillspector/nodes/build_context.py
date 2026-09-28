@@ -2589,20 +2589,21 @@ def build_context(state: SkillspectorState) -> dict[str, object]:
         for pattern in patterns
     ):
         raise ValueError("Exclusions require at most 128 relative POSIX globs (1-1024 characters)")
-    if any(fnmatchcase("SKILL.md", pattern) for pattern in patterns):
+    if any(
+        fnmatchcase(manifest, pattern)
+        for manifest in ("SKILL.md", "skill.md")
+        for pattern in patterns
+    ):
         raise ValueError("--exclude must not match the required SKILL.md manifest")
     user_excluded = sorted(
         path
-        for path in set(inventoried_components) | set(excluded_artifacts)
+        for path in inventoried_components
         if any(fnmatchcase(path, pattern) for pattern in patterns)
     )
     user_excluded_set = set(user_excluded)
     inventoried_components = [
         path for path in inventoried_components if path not in user_excluded_set
     ]
-    excluded_artifacts = {
-        path: reason for path, reason in excluded_artifacts.items() if path not in user_excluded_set
-    }
     user_exclusion_events = [
         ledger_event(
             outcome=LedgerOutcome.SKIPPED,

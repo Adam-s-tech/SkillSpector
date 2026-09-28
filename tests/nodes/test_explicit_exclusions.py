@@ -23,9 +23,6 @@ def make_skill(root: Path) -> None:
 def test_excluded_bytes_never_enter_content_caches(tmp_path, monkeypatch):
     make_skill(tmp_path)
     (tmp_path / "SKILL.md").write_text("# Demo\nSee [fixture](fixtures/attack.sh).\n")
-    # Exercise both ordinary files and the separately audited generated tree.
-    (tmp_path / "node_modules").mkdir()
-    (tmp_path / "node_modules/attack.sh").write_text("#!/bin/sh\nrm -rf /\n")
     module = importlib.import_module("skillspector.nodes.build_context")
     original = module._open_regular_file_no_follow
 
@@ -34,14 +31,12 @@ def test_excluded_bytes_never_enter_content_caches(tmp_path, monkeypatch):
         return original(path, *args, **kwargs)
 
     monkeypatch.setattr(module, "_open_regular_file_no_follow", guarded_open)
-    state = build_context(
-        {"skill_path": str(tmp_path), "exclude_patterns": ["fixtures/*", "node_modules/*"]}
-    )
+    state = build_context({"skill_path": str(tmp_path), "exclude_patterns": ["fixtures/*"]})
     for key in ("file_cache", "raw_file_cache", "local_file_cache", "llm_file_cache"):
         assert set(state[key]) == {"SKILL.md"}
     assert state["components"] == ["SKILL.md"]
     excluded = [row for row in state["artifact_inventory"] if row.get("reason") == "user_exclusion"]
-    assert {row["path"] for row in excluded} == {"fixtures/attack.sh", "node_modules/attack.sh"}
+    assert {row["path"] for row in excluded} == {"fixtures/attack.sh"}
     assert all(row["disposition"] == "partial" for row in excluded)
 
 
@@ -182,3 +177,70 @@ def test_unmatched_pattern_remains_complete_and_audited(tmp_path):
     assert completeness["exclude_patterns"] == ["fixtures/*"]
     assert completeness["excluded_file_count"] == 0
     assert report["risk_assessment"]["recommendation"] == "SAFE"
+
+
+@pytest.mark.parametrize("pattern", ["skill.md", "s*.md", "*kill.md"])
+def test_lowercase_manifest_cannot_be_excluded(tmp_path, pattern):
+    (tmp_path / "skill.md").write_text("# Demo\nA harmless skill.\n")
+    with pytest.raises(ValueError, match="manifest"):
+        build_context({"skill_path": str(tmp_path), "exclude_patterns": [pattern]})
+
+
+def test_real_cli_accepts_lowercase_manifest_with_exclusions(tmp_path):
+    (tmp_path / "skill.md").write_text("# Demo\nA harmless skill.\n")
+    output = tmp_path.parent / f"{tmp_path.name}-lowercase.json"
+    result = CliRunner().invoke(
+        app,
+        [
+            "scan",
+            str(tmp_path),
+            "--no-llm",
+            "--exclude",
+            "fixtures/*",
+            "--format",
+            "json",
+            "--output",
+            str(output),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(output.read_text())["analysis_completeness"]["status"] == "complete"
+
+
+@pytest.mark.parametrize("pattern", ["tests/[a-z]*.json", "tests/[/].json"])
+def test_terminal_patterns_preserve_rich_brackets(tmp_path, pattern):
+    (tmp_path / "SKILL.md").write_text("# Demo\nA harmless skill.\n")
+    result = CliRunner().invoke(app, ["scan", str(tmp_path), "--no-llm", "--exclude", pattern])
+    assert result.exit_code == 0, result.output
+    assert pattern in result.output
+
+
+def test_markdown_patterns_use_lossless_code_spans(tmp_path):
+    from markdown_it import MarkdownIt
+
+    (tmp_path / "SKILL.md").write_text("# Demo\nA harmless skill.\n")
+    output = tmp_path.parent / f"{tmp_path.name}-patterns.md"
+    patterns = ["fixtures/*", "tests/*", "tests/`name`.*"]
+    args = ["scan", str(tmp_path), "--no-llm", "--format", "markdown", "--output", str(output)]
+    for pattern in patterns:
+        args.extend(["--exclude", pattern])
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    tokens = MarkdownIt().parse(output.read_text())
+    code = [
+        child.content
+        for token in tokens
+        for child in (token.children or [])
+        if child.type == "code_inline"
+    ]
+    assert all(pattern in code for pattern in patterns)
+
+
+def test_policy_excluded_files_are_not_counted_as_user_exclusions(tmp_path):
+    (tmp_path / "SKILL.md").write_text("# Demo\nA harmless skill.\n")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules/package.json").write_text("{}")
+    baseline = build_context({"skill_path": str(tmp_path)})
+    excluded = build_context({"skill_path": str(tmp_path), "exclude_patterns": ["*.json"]})
+    assert not any(row.get("reason") == "user_exclusion" for row in excluded["artifact_inventory"])
+    assert excluded["components"] == baseline["components"]

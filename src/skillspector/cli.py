@@ -58,7 +58,12 @@ from skillspector.inspection_ledger import (
 from skillspector.logging_config import get_logger, set_level
 from skillspector.mcp_registry import scan_registry
 from skillspector.models import Finding
-from skillspector.multi_skill import MultiSkillDetectionResult, SkillDirectory, detect_skills
+from skillspector.multi_skill import (
+    MultiSkillDetectionResult,
+    SkillDirectory,
+    _manifest_file,
+    detect_skills,
+)
 from skillspector.nodes.analyzers import ANALYZER_MODULES, ANALYZER_NODE_IDS
 from skillspector.nodes.report import report
 from skillspector.sarif_models import SARIF_SCHEMA_URI, validate_sarif_report
@@ -358,7 +363,7 @@ def _write_result(
             console.print(f"Report saved to: {output}")
     else:
         if format == FormatChoice.terminal:
-            console.print(report_body)
+            console.print(report_body, markup=False)
         else:
             print(report_body)
 
@@ -603,10 +608,10 @@ def scan(
         or transitive_enabled
         or mcp_registry
         or not Path(input_path).is_dir()
-        or not (Path(input_path) / "SKILL.md").is_file()
+        or _manifest_file(Path(input_path)) is None
     ):
         err_console.print(
-            "[red]Error:[/red] --exclude requires a local single-skill directory with SKILL.md "
+            "[red]Error:[/red] --exclude requires a local single-skill directory with SKILL.md or skill.md "
             "and cannot be combined with --recursive, --transitive, or --mcp-registry"
         )
         raise typer.Exit(code=2)

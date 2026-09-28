@@ -942,7 +942,9 @@ def _render_terminal_completeness(
     table.add_row("Partially inspected", str(completeness.get("partially_inspected_files", 0)))
     table.add_row("Entirely uninspected", str(completeness.get("entirely_uninspected_files", 0)))
     if completeness.get("exclude_patterns"):
-        table.add_row("Explicit exclusion patterns", str(completeness["exclude_patterns"]))
+        table.add_row(
+            "Explicit exclusion patterns", escape(", ".join(completeness["exclude_patterns"]))
+        )
         table.add_row(
             "Excluded files (not inspected)", str(completeness.get("excluded_file_count", 0))
         )
@@ -1392,7 +1394,11 @@ def _render_markdown_completeness(
 
     patterns = completeness.get("exclude_patterns", [])
     if patterns:
-        lines.append(f"Explicit exclusion patterns: {_markdown_cell(patterns)}\n")
+        spans = []
+        for pattern in patterns:
+            delimiter = "`" * (max((len(run) for run in re.findall(r"`+", pattern)), default=0) + 1)
+            spans.append(f"{delimiter} {pattern} {delimiter}")
+        lines.append(f"Explicit exclusion patterns: {', '.join(spans)}\n")
         lines.append(
             f"Excluded files (not inspected): {completeness.get('excluded_file_count', 0)}\n"
         )
