@@ -640,8 +640,7 @@ class TestBuiltInCryptominerRules:
     def test_wasm_instantiate_with_text_mining_prose_is_not_coinjacking(self):
         """`mining` as English prose must not fire; only a mining call does."""
         content = (
-            "WebAssembly.instantiate(bytes).then(m=>runAnalytics(m));"
-            " // helpers for text mining\n"
+            "WebAssembly.instantiate(bytes).then(m=>runAnalytics(m)); // helpers for text mining\n"
         )
         findings = _run_builtin(content, "loader.js")
         assert not _has_rule(findings, "crypto_coinjacking")
