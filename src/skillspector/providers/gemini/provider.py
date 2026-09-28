@@ -28,12 +28,14 @@ Optional env vars:
     SKILLSPECTOR_MODEL      — Model override
 """
 
+# pattern: Imperative Shell
+
 from __future__ import annotations
 
 import os
 import re
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from time import monotonic
 from typing import ClassVar
@@ -49,6 +51,8 @@ from skillspector.providers.chat_models import create_openai_compatible_chat_mod
 REGISTRY_PATH = str(Path(__file__).with_name("model_registry.yaml"))
 
 _AUTH_LOCK = threading.Lock()
+# ponytail: one in-flight Google auth operation per process; split by credential if needed.
+_AUTH_OPERATION_SLOT = threading.BoundedSemaphore(1)
 _CACHED_CREDENTIALS: google.auth.credentials.Credentials | None = None
 
 _PROJECT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
@@ -147,34 +151,56 @@ def _bounded_request(deadline: float | None) -> _BoundedRequest:
     return _BoundedRequest(deadline)
 
 
-def _discover_default_credentials(
-    deadline: float | None, request: Request
-) -> tuple[google.auth.credentials.Credentials, str | None]:
-    """Run ADC discovery within *deadline* without exposing a late result."""
-    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
-    if deadline is None:
-        return google.auth.default(scopes=scopes, request=request)
+def _run_auth_operation[T](deadline: float | None, operation: Callable[[], T]) -> T:
+    """Bound caller wait and admit only one unfinished Google auth call."""
+    remaining = _remaining_seconds(deadline)
+    if remaining is None:
+        _AUTH_OPERATION_SLOT.acquire()
+        try:
+            return operation()
+        finally:
+            _AUTH_OPERATION_SLOT.release()
+    if not _AUTH_OPERATION_SLOT.acquire(timeout=remaining):
+        raise TimeoutError("Gemini authentication timed out.")
 
     completed = threading.Event()
-    results: list[tuple[google.auth.credentials.Credentials, str | None]] = []
-    errors: list[Exception] = []
+    results: list[T] = []
+    errors: list[BaseException] = []
 
-    def discover() -> None:
+    def run() -> None:
         try:
-            results.append(google.auth.default(scopes=scopes, request=request))
-        except Exception as exc:
+            _remaining_seconds(deadline)
+            results.append(operation())
+        except BaseException as exc:
             errors.append(exc)
         finally:
+            _AUTH_OPERATION_SLOT.release()
             completed.set()
 
-    worker = threading.Thread(target=discover, daemon=True)
-    worker.start()
+    try:
+        _remaining_seconds(deadline)
+        threading.Thread(target=run, daemon=True).start()
+    except BaseException:
+        _AUTH_OPERATION_SLOT.release()
+        raise
     if not completed.wait(timeout=_remaining_seconds(deadline)):
         raise TimeoutError("Gemini authentication timed out.")
     _remaining_seconds(deadline)
     if errors:
         raise errors[0]
     return results[0]
+
+
+def _discover_default_credentials(
+    deadline: float | None, request: Request
+) -> tuple[google.auth.credentials.Credentials, str | None]:
+    """Run ADC discovery without exposing a late result."""
+    return _run_auth_operation(
+        deadline,
+        lambda: google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"], request=request
+        ),
+    )
 
 
 def _get_credentials(deadline: float | None) -> str:
@@ -208,17 +234,18 @@ def _get_credentials(deadline: float | None) -> str:
                     f"Unexpected error obtaining Google Cloud credentials: {exc}"
                 ) from exc
 
-        if not _CACHED_CREDENTIALS.valid:
+        creds = _CACHED_CREDENTIALS
+        if not creds.valid:
             _remaining_seconds(deadline)
             try:
-                _CACHED_CREDENTIALS.refresh(request)
+                _run_auth_operation(deadline, lambda: creds.refresh(request))
             except TimeoutError:
                 raise
             except Exception:
                 raise RefreshError("Google Cloud credential refresh failed.") from None
 
         _remaining_seconds(deadline)
-        token = getattr(_CACHED_CREDENTIALS, "token", None)
+        token = getattr(creds, "token", None)
         if not token:
             raise RefreshError("Google Cloud credential refresh failed.")
         return str(token)

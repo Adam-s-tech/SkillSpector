@@ -23,8 +23,11 @@ from unittest.mock import MagicMock
 
 import google.auth
 import pytest
+from google.auth import _exponential_backoff
+from google.auth.compute_engine.credentials import Credentials as ComputeCredentials
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials as UserCredentials
 from langchain_openai import ChatOpenAI
 from typer.testing import CliRunner
 
@@ -289,7 +292,7 @@ class TestGeminiProvider:
         def default(*, scopes: list[str], request: object) -> tuple[MockCredentials, str]:
             nonlocal default_calls
             default_calls += 1
-            if default_calls == 1:
+            if not release.is_set():
                 entered.set()
                 try:
                     release.wait(timeout=1.0)
@@ -302,10 +305,13 @@ class TestGeminiProvider:
         monkeypatch.setattr(google.auth, "default", default)
 
         try:
-            with pytest.raises(TimeoutError, match="Gemini authentication timed out"):
-                GeminiProvider().resolve_credentials(timeout=0.01)
+            for _ in range(3):
+                with pytest.raises(TimeoutError, match="Gemini authentication timed out"):
+                    GeminiProvider().resolve_credentials(timeout=0.01)
             assert entered.is_set()
             assert not finished.is_set()
+            assert len(workers) == 1
+            assert default_calls == 1
         finally:
             release.set()
             for worker in workers:
@@ -322,6 +328,78 @@ class TestGeminiProvider:
         )
         assert default_calls == 2
         assert gemini_provider._CACHED_CREDENTIALS is on_time_credentials
+
+    @pytest.mark.parametrize("credential_kind", ["authorized_user", "metadata"])
+    def test_refresh_backoff_respects_caller_deadline(
+        self, monkeypatch: pytest.MonkeyPatch, credential_kind: str
+    ) -> None:
+        """Real google-auth retry sleep cannot keep the caller past its budget."""
+        import skillspector.providers.gemini.provider as gemini_provider
+
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project-123")
+        creds = (
+            UserCredentials(
+                token=None,
+                refresh_token="test-refresh",
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id="test-client",
+                client_secret="test-secret",
+            )
+            if credential_kind == "authorized_user"
+            else ComputeCredentials()
+        )
+        monkeypatch.setattr(gemini_provider, "_CACHED_CREDENTIALS", creds)
+        response = MagicMock(status_code=503, content=b'{"error":"unavailable"}')
+        http_request = MagicMock(return_value=response)
+        real_request_factory = gemini_provider._bounded_request
+
+        def request_factory(deadline: float | None) -> Request:
+            request = real_request_factory(deadline)
+            request.session.request = http_request
+            return request
+
+        entered_backoff = threading.Event()
+        release_backoff = threading.Event()
+        caller_done = threading.Event()
+        errors: list[Exception] = []
+        workers: list[threading.Thread] = []
+        real_thread = threading.Thread
+
+        def record_thread(*args: object, **kwargs: object) -> threading.Thread:
+            worker = real_thread(*args, **kwargs)
+            workers.append(worker)
+            return worker
+
+        def hold_backoff(_seconds: float) -> None:
+            entered_backoff.set()
+            release_backoff.wait(timeout=2.0)
+
+        def call() -> None:
+            try:
+                GeminiProvider().resolve_credentials(timeout=0.03)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                caller_done.set()
+
+        monkeypatch.setattr(gemini_provider, "_bounded_request", request_factory)
+        monkeypatch.setattr(gemini_provider.threading, "Thread", record_thread)
+        monkeypatch.setattr(_exponential_backoff.time, "sleep", hold_backoff)
+        caller = real_thread(target=call)
+        try:
+            caller.start()
+            assert entered_backoff.wait(timeout=1.0)
+            assert caller_done.wait(timeout=0.2)
+            assert len(errors) == 1 and isinstance(errors[0], TimeoutError)
+            assert http_request.call_count == 1
+        finally:
+            release_backoff.set()
+            caller.join(timeout=2.0)
+            for worker in workers:
+                worker.join(timeout=2.0)
+
+        assert not caller.is_alive()
+        assert all(not worker.is_alive() for worker in workers)
 
     def test_credentials_skip_adc_when_lock_acquire_exhausts_deadline(
         self, monkeypatch: pytest.MonkeyPatch
