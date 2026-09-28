@@ -433,14 +433,14 @@ def test_markdown_image_alt_text_is_not_a_second_plain_reference(tmp_path: Path)
 
 
 @pytest.mark.parametrize(
-    "source_text",
+    ("source_text", "target"),
     [
-        r"![Chart\](assets/chart.png)",
-        "![[Chart](assets/chart.png)",
-        r"![Chart](assets/chart.png\))",
-        "![Chart](assets/chart.png Color chart)",
-        "![Chart](assets/chart.png (Color chart))",
-        r'![Chart](assets/chart.png "Color \"chart\"")',
+        (r"![Chart\](assets/chart.png)", "assets/chart.png"),
+        ("![[Chart](assets/chart.png)", "assets/chart.png"),
+        (r"![Chart](assets/chart.png\))", "assets/chart.png)"),
+        ("![Chart](assets/chart.png Color chart)", "assets/chart.png"),
+        ("![Chart](assets/chart.png (Color chart))", "assets/chart.png"),
+        (r'![Chart](assets/chart.png "Color \"chart\"")', "assets/chart.png"),
     ],
     ids=[
         "escaped-label-delimiter",
@@ -452,16 +452,16 @@ def test_markdown_image_alt_text_is_not_a_second_plain_reference(tmp_path: Path)
     ],
 )
 def test_ambiguous_image_syntax_does_not_prove_passive_use(
-    tmp_path: Path, source_text: str
+    tmp_path: Path, source_text: str, target: str
 ) -> None:
     records = resolve_bundle_references(
         tmp_path,
         source_path="SKILL.md",
         source_text=source_text,
-        known_paths=["SKILL.md", "assets/chart.png"],
+        known_paths=["SKILL.md", target],
     )
 
-    references = [record for record in records if record["target_path"] == "assets/chart.png"]
+    references = [record for record in records if record["target_path"] == target]
     assert references
     assert all(record["reference_kind"] != "markdown_image" for record in references)
 
@@ -659,6 +659,58 @@ def test_reference_resolver_rejects_external_and_parent_escape(tmp_path: Path) -
     assert records
     assert all(record["status"] == "rejected" for record in records)
     assert all(record["target_path"] is None for record in records)
+
+
+def test_scoped_npm_package_spec_is_not_a_reference(tmp_path: Path) -> None:
+    source = (
+        "Run `npx --yes @xerg/cli@0.34.0 doctor --json` after approval.\n"
+        "Install @modelcontextprotocol/server-filesystem or npm i @types/node @babel/core@^7.0.0.\n"
+    )
+    records = resolve_bundle_references(
+        tmp_path,
+        source_path="SKILL.md",
+        source_text=source,
+        known_paths=["SKILL.md"],
+    )
+    assert all(record["target_path"] is None for record in records)
+    assert not any(record["status"] in {"resolved", "missing", "ambiguous"} for record in records)
+
+
+def test_explicit_known_at_paths_resolve(tmp_path: Path) -> None:
+    source = "See [@scope/tool.py](@scope/tool.py) and [helper](@pkg/helper.sh) for details.\n"
+    records = resolve_bundle_references(
+        tmp_path,
+        source_path="SKILL.md",
+        source_text=source,
+        known_paths=["SKILL.md", "@scope/tool.py", "@pkg/helper.sh"],
+    )
+    assert len(records) == 2
+    assert [record["target_path"] for record in records] == ["@scope/tool.py", "@pkg/helper.sh"]
+    assert all(record["status"] == "resolved" for record in records)
+    assert all(record["disposition"] == ArtifactDisposition.ANALYZED for record in records)
+
+
+def test_paths_followed_by_punctuation_still_resolve(tmp_path: Path) -> None:
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "run.sh").write_text("#!/bin/sh", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("guide", encoding="utf-8")
+    source = (
+        "run scripts/run.sh; then stop\n"
+        "open docs/guide.md?v=2 now\n"
+        "cat docs/guide.md> out.txt\n"
+        "<a href=docs/guide.md>\n"
+    )
+    records = resolve_bundle_references(
+        tmp_path,
+        source_path="SKILL.md",
+        source_text=source,
+        known_paths=["SKILL.md", "scripts/run.sh", "docs/guide.md"],
+    )
+    resolved = [r for r in records if r["status"] == "resolved"]
+    resolved_targets = {r["target_path"] for r in resolved}
+    assert "scripts/run.sh" in resolved_targets
+    assert "docs/guide.md" in resolved_targets
 
 
 def test_rejected_candidates_do_not_consume_accepted_reference_budget(tmp_path: Path) -> None:
