@@ -83,15 +83,12 @@ def test_graph_import_state_restores_preexisting_invoke_attribute(
 ) -> None:
     """rng1995 #436: isolation must not delete a pre-existing ``invoke`` attribute."""
     sentinel = object()
-    lazy_graph.__dict__["invoke"] = sentinel
+    monkeypatch.setitem(lazy_graph.__dict__, "invoke", sentinel)
+    fixture_gen = _graph_import_state.__wrapped__(monkeypatch)
+    next(fixture_gen)
     try:
-        fixture_gen = _graph_import_state.__wrapped__(monkeypatch)
-        next(fixture_gen)
-        try:
-            assert "invoke" not in lazy_graph.__dict__
-        finally:
-            with pytest.raises(StopIteration):
-                next(fixture_gen)
-        assert lazy_graph.__dict__["invoke"] is sentinel
+        assert "invoke" not in lazy_graph.__dict__
     finally:
-        lazy_graph.__dict__.pop("invoke", None)
+        with pytest.raises(StopIteration):
+            next(fixture_gen)
+    assert lazy_graph.__dict__["invoke"] is sentinel
