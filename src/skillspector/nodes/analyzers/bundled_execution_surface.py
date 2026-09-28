@@ -1684,55 +1684,82 @@ def _analyze_document(
 
 def _plugin_hook_documents(
     file_cache: Mapping[str, str],
-) -> dict[str, str]:
-    """Resolve hook declarations from `.claude-plugin/plugin.json`.
+) -> tuple[dict[str, str], dict[str, InspectionLedgerEvent]]:
+    """Resolve bounded plugin hooks and retain every uninspected declaration."""
+    documents: dict[str, str] = {}
+    partial: dict[str, InspectionLedgerEvent] = {}
 
-    Returns a mapping of analyzed path to document content: hook files the
-    manifest's `hooks` field points at, plus an inline `hooks` object wrapped
-    the way a hooks document looks and attributed to the manifest itself.
-    Referenced paths resolve relative to the plugin root and must stay
-    inside it; absolute paths, parent escapes, and files missing from the
-    cache are skipped so a hostile or sloppy manifest cannot pull arbitrary
-    content into the analysis.
-    """
+    def incomplete(path: str, reason: LedgerReason, **bounds: int) -> None:
+        partial[path] = ledger_event(
+            outcome=LedgerOutcome.PARTIAL,
+            phase="static",
+            analyzer_id=ANALYZER_ID,
+            path=path,
+            reason=reason,
+            **bounds,
+        )
+
     content = file_cache.get(_PLUGIN_MANIFEST_PATH)
-    if content is None or len(content) > MAX_FILE_CHARS:
-        return {}
+    if content is None:
+        return documents, partial
+    if len(content) > MAX_FILE_CHARS:
+        incomplete(
+            _PLUGIN_MANIFEST_PATH,
+            LedgerReason.SIZE_LIMIT,
+            observed_characters=len(content),
+            limit_characters=MAX_FILE_CHARS,
+        )
+        return documents, partial
     try:
         manifest = _parse_document(content)
     except (RecursionError, ValueError):
-        return {}
+        incomplete(_PLUGIN_MANIFEST_PATH, LedgerReason.OPAQUE_CONTENT)
+        return documents, partial
     if not isinstance(manifest, dict):
-        return {}
+        incomplete(_PLUGIN_MANIFEST_PATH, LedgerReason.OPAQUE_CONTENT)
+        return documents, partial
     raw_hooks = manifest.get("hooks")
     if raw_hooks is None:
-        return {}
-    documents: dict[str, str] = {}
-    candidates: list[str]
-    if isinstance(raw_hooks, str):
-        candidates = [raw_hooks]
-    elif isinstance(raw_hooks, list):
-        candidates = [entry for entry in raw_hooks if isinstance(entry, str)]
-    elif isinstance(raw_hooks, dict):
-        documents[_PLUGIN_MANIFEST_PATH] = json.dumps({"hooks": raw_hooks}, ensure_ascii=False)
-        candidates = []
-    else:
-        return {}
+        return documents, partial
+    candidates = raw_hooks if isinstance(raw_hooks, list) else [raw_hooks]
+    inline: dict[str, list] = {}
     for candidate in candidates[:_MAX_PLUGIN_HOOK_PATHS]:
+        if isinstance(candidate, dict):
+            for event, groups in candidate.items():
+                if isinstance(groups, list):
+                    inline.setdefault(event, []).extend(groups)
+                else:
+                    incomplete(_PLUGIN_MANIFEST_PATH, LedgerReason.OPAQUE_CONTENT)
+            continue
+        if not isinstance(candidate, str):
+            incomplete(_PLUGIN_MANIFEST_PATH, LedgerReason.OPAQUE_CONTENT)
+            continue
         resolved = posixpath.normpath(candidate)
         if (
             not resolved
-            or resolved == "."
-            or resolved == ".."
+            or resolved in {".", ".."}
             or resolved.startswith("../")
             or posixpath.isabs(candidate)
+            or "\\" in candidate
+            or (len(candidate) > 1 and candidate[1] == ":")
         ):
+            incomplete(_PLUGIN_MANIFEST_PATH, LedgerReason.REFERENCED_UNINSPECTED)
             continue
         hook_content = file_cache.get(resolved)
         if hook_content is None:
+            incomplete(resolved, LedgerReason.REFERENCED_UNINSPECTED)
             continue
         documents[resolved] = hook_content
-    return documents
+    if inline:
+        documents[_PLUGIN_MANIFEST_PATH] = json.dumps({"hooks": inline}, ensure_ascii=False)
+    if len(candidates) > _MAX_PLUGIN_HOOK_PATHS:
+        incomplete(
+            _PLUGIN_MANIFEST_PATH,
+            LedgerReason.OUTPUT_LIMIT,
+            observed_records=len(candidates),
+            limit_records=_MAX_PLUGIN_HOOK_PATHS,
+        )
+    return documents, partial
 
 
 def node(state: SkillspectorState) -> AnalyzerNodeResponse:
@@ -1747,12 +1774,21 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
     ledger_events: list[InspectionLedgerEvent] = []
     previous_settings_hook_ids: set[_HookIdentity] = set()
     applicable_paths = set(components).intersection(_APPLICABLE_PATHS)
-    plugin_documents = _plugin_hook_documents(file_cache)
+    plugin_documents, plugin_partial = _plugin_hook_documents(file_cache)
+    if decodable.get(_PLUGIN_MANIFEST_PATH) is False:
+        plugin_partial[_PLUGIN_MANIFEST_PATH] = ledger_event(
+            outcome=LedgerOutcome.PARTIAL,
+            phase="static",
+            analyzer_id=ANALYZER_ID,
+            path=_PLUGIN_MANIFEST_PATH,
+            reason=LedgerReason.OPAQUE_CONTENT,
+        )
     applicable_paths |= set(plugin_documents)
     hooks_disabled = _bundled_hooks_are_disabled(applicable_paths, file_cache, decodable)
 
     for path in sorted(applicable_paths):
-        if decodable.get(path) is False and path not in plugin_documents:
+        partial_event = plugin_partial.pop(path, None)
+        if decodable.get(path) is False:
             ledger_events.append(
                 ledger_event(
                     outcome=LedgerOutcome.PARTIAL,
@@ -1798,8 +1834,12 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
             )
             continue
         findings.extend(path_findings)
+        if partial_event is not None:
+            event.update(partial_event)
+            event["emitted_finding_ids"] = [finding.finding_id for finding in path_findings]
         ledger_events.append(event)
 
+    ledger_events.extend(plugin_partial.values())
     status = analyzer_status_for_events(ANALYZER_ID, ledger_events)
     return {
         "findings": findings,
