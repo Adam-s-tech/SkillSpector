@@ -514,11 +514,9 @@ def _comparison_index(report: dict[str, Any]) -> dict[tuple[str, str | None], di
         identity = (snapshot["name"], snapshot["version"])
         if identity in index:
             raise ValueError(f"comparison has duplicate server identity: {identity!r}")
-        # Acquisition provenance and raw-record hashes are not normalized field changes.
+        # Preserve the raw hash separately from normalized field differences.
         normalized = {
-            key: value
-            for key, value in snapshot.items()
-            if key not in {"source", "scanned_at", "record_hash"}
+            key: value for key, value in snapshot.items() if key not in {"source", "scanned_at"}
         }
         for key in ("packages", "remotes"):
             normalized[key] = sorted(normalized[key], key=_canonical_json)
@@ -538,19 +536,25 @@ def compare_registry_reports(previous: dict[str, Any], current: dict[str, Any]) 
         return {"name": key[0], "version": key[1]}
 
     changed = []
+    unmodeled_changes = []
     for key in ordered(before.keys() & after.keys()):
         differences = {
             field: {"before": before[key][field], "after": value}
             for field, value in after[key].items()
-            if before[key][field] != value
+            if field != "record_hash" and before[key][field] != value
         }
         if differences:
             changed.append({**identity(key), "fields": differences})
+        elif before[key]["record_hash"] != after[key]["record_hash"]:
+            unmodeled_changes.append(identity(key))
     return {
         "added": [identity(key) for key in ordered(after.keys() - before.keys())],
         "removed": [identity(key) for key in ordered(before.keys() - after.keys())],
         "changed": changed,
-        "unchanged_count": len(before.keys() & after.keys()) - len(changed),
+        "unmodeled_changes": unmodeled_changes,
+        "unchanged_count": len(before.keys() & after.keys())
+        - len(changed)
+        - len(unmodeled_changes),
     }
 
 

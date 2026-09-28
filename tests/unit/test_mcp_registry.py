@@ -618,6 +618,7 @@ def test_registry_comparison_reports_changes_without_changing_risk(tmp_path: Pat
                 "fields": {"description": {"before": "old", "after": "new"}},
             }
         ],
+        "unmodeled_changes": [],
         "unchanged_count": 1,
     }
     for key in ["findings", "risk_score", "max_risk_score", "server_count"]:
@@ -639,14 +640,13 @@ def test_comparison_ignores_provenance_and_collection_order() -> None:
         ],
     }
     current = deepcopy(report)
-    current["snapshots"][0].update(
-        source="second.json", scanned_at="later", record_hash="different"
-    )
+    current["snapshots"][0].update(source="second.json", scanned_at="later")
     current["snapshots"][0]["packages"].reverse()
     assert mcp_registry.compare_registry_reports(report, current) == {
         "added": [],
         "removed": [],
         "changed": [],
+        "unmodeled_changes": [],
         "unchanged_count": 1,
     }
 
@@ -803,3 +803,30 @@ def test_comparison_record_budget_counts_nested_collections_across_servers(
     monkeypatch.setattr(mcp_registry, "MAX_REGISTRY_RECORDS", 5)
     with pytest.raises(ValueError, match="exceeds 5 records"):
         mcp_registry.compare_registry_reports(report, report)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("registryBaseUrl", "https://other.example"),
+        ("runtimeArguments", [{"value": "--mount=/host"}]),
+    ],
+)
+def test_comparison_surfaces_unmodeled_same_version_changes(field: str, value: object) -> None:
+    from copy import deepcopy
+
+    server = pinned_server(version="1", packages=[pinned_package()])
+    edited = deepcopy(server)
+    edited["packages"][0][field] = value
+    previous = {
+        "mcp_registry": True,
+        "snapshots": [normalize_payload(one_server(server), source="fixture")[0].to_dict()],
+    }
+    current = {
+        "mcp_registry": True,
+        "snapshots": [normalize_payload(one_server(edited), source="fixture")[0].to_dict()],
+    }
+    result = mcp_registry.compare_registry_reports(previous, current)
+    assert result["changed"] == []
+    assert result["unmodeled_changes"] == [{"name": "safe/example", "version": server["version"]}]
+    assert result["unchanged_count"] == 0

@@ -212,8 +212,11 @@ The optional `comparison` object lists added and removed server identities,
 changed normalized fields with their previous and current values, and an
 `unchanged_count`. Identity is the server name and version, so a new version
 appears as an addition and the old version as a removal if it is absent from the
-new scan. Acquisition source, scan timestamp and raw-record hash are excluded
-from comparison; package and remote ordering alone does not count as a change.
+new scan. Acquisition source and scan timestamp are excluded from comparison.
+`unmodeled_changes` lists same-identity records whose raw-record hash changed
+while normalized fields match; these are not counted as unchanged. This can
+indicate a change to fields outside the snapshot model, or array reordering in
+the raw record. Package and remote ordering alone is not a normalized field change.
 Compare reports with the same selection scope: a server absent from the current
 input is reported as removed, which does not prove it was removed from a registry.
 
