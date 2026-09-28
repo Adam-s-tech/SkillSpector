@@ -2710,6 +2710,10 @@ def _scan_multi_skill(
     aggregate_limitations = [
         f"recursive discovery {limitation.resource} limit reached"
         for limitation in detection.limitations[:256]
+        # Symlink omissions get their own clearer aggregate message below;
+        # listing the generic one too would double-report the same entries.
+        if limitation.resource != "multi_skill_symlinked_entry"
+        or not detection.omitted_symlink_entries
     ]
     retained_public_records = 0
     retained_report_characters = 0

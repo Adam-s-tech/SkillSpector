@@ -1865,6 +1865,12 @@ def test_recursive_symlinked_skills_are_reported_as_omitted(
     detection = MultiSkillDetectionResult(
         is_multi_skill=True,
         skills=[skill],
+        limitations=(
+            MultiSkillDetectionLimitation(
+                reason_code="read_error",
+                resource="multi_skill_symlinked_entry",
+            ),
+        ),
         omitted_symlink_entries=1,
     )
     output = tmp_path / "combined.json"
@@ -1886,6 +1892,10 @@ def test_recursive_symlinked_skills_are_reported_as_omitted(
     assert payload["risk_recommendation"] == "CAUTION"
     assert any(
         "symlinked recursive skill(s) omitted" in limitation
+        for limitation in payload["analysis_completeness"]["limitations"]
+    )
+    assert not any(
+        "multi_skill_symlinked_entry limit reached" in limitation
         for limitation in payload["analysis_completeness"]["limitations"]
     )
     assert payload["skills"][-1] == {
