@@ -2869,7 +2869,7 @@ def _scan_multi_skill(
         )
     aggregate_limitations = list(dict.fromkeys(aggregate_limitations))[:256]
     aggregate_completeness = _multi_skill_analysis_completeness(
-        total_skills=len(skills),
+        total_skills=len(skills) + omitted_symlink_entry_count,
         complete_skills=complete_skill_count,
         partial_skills=partial_skill_count,
         failed_skills=failed_skill_count,

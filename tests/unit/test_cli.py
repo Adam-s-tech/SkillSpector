@@ -1880,6 +1880,9 @@ def test_recursive_symlinked_skills_are_reported_as_omitted(
     assert payload["skills_scanned"] == 1
     assert payload["skills_omitted"] == 1
     assert payload["analysis_completeness"]["is_complete"] is False
+    assert payload["analysis_completeness"]["total_files"] == 2
+    assert payload["analysis_completeness"]["coverage_percent"] == 50.0
+    assert payload["analysis_completeness"]["entirely_uninspected_files"] == 1
     assert payload["risk_recommendation"] == "CAUTION"
     assert any(
         "symlinked recursive skill(s) omitted" in limitation
