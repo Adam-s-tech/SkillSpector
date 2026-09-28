@@ -33,6 +33,7 @@ from hashlib import sha256
 from pathlib import Path
 from time import monotonic
 from typing import Annotated, cast
+from urllib.parse import quote
 
 import typer
 from langchain_core.runnables import RunnableConfig
@@ -2616,7 +2617,7 @@ def _multi_skill_sarif_report(
             # different skills stop collapsing onto one repo-root-relative
             # path. Single-skill output is untouched: only recursive merges
             # set uriBaseId.
-            relative = skill.relative_path.strip("/")
+            relative = quote(skill.path.name, safe="")
             if relative:
                 for result in run.get("results", []):
                     if not isinstance(result, dict):
@@ -2629,8 +2630,25 @@ def _multi_skill_sarif_report(
                             physical.get("artifactLocation") if isinstance(physical, dict) else None
                         )
                         if isinstance(artifact, dict):
+                            provenance = artifact.get("properties")
+                            if isinstance(provenance, dict) and any(
+                                key in provenance
+                                for key in (
+                                    "sourceIdentity",
+                                    "sourceUrl",
+                                    "sourceDigest",
+                                    "transitiveDepth",
+                                )
+                            ):
+                                continue
                             artifact["uriBaseId"] = _RECURSIVE_SARIF_URI_BASE_ID
-                run["originalUriBaseIds"] = {_RECURSIVE_SARIF_URI_BASE_ID: {"uri": f"{relative}/"}}
+                run["originalUriBaseIds"] = {
+                    "SCANROOT": {"uri": skill.path.parent.resolve().as_uri() + "/"},
+                    _RECURSIVE_SARIF_URI_BASE_ID: {
+                        "uri": f"{relative}/",
+                        "uriBaseId": "SCANROOT",
+                    },
+                }
             runs.append(run)
 
     invocation_properties: dict[str, object] = {"analysisCompleteness": completeness}

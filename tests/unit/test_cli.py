@@ -2043,7 +2043,10 @@ def test_recursive_sarif_scopes_result_uris_to_skill_directory(tmp_path: Path) -
         "name": "malicious_skill",
         "path": "malicious_skill",
     }
-    assert run["originalUriBaseIds"] == {"SKILLROOT": {"uri": "malicious_skill/"}}
+    assert run["originalUriBaseIds"] == {
+        "SCANROOT": {"uri": tmp_path.as_uri() + "/"},
+        "SKILLROOT": {"uri": "malicious_skill/", "uriBaseId": "SCANROOT"},
+    }
     locations = run["results"][0]["locations"]
     assert [loc["physicalLocation"]["artifactLocation"]["uri"] for loc in locations] == [
         "SKILL.md",
@@ -2071,7 +2074,10 @@ def test_recursive_sarif_child_without_results_still_maps_base_id(tmp_path: Path
 
     validate_sarif_report(payload)
     run = payload["runs"][0]
-    assert run["originalUriBaseIds"] == {"SKILLROOT": {"uri": "one/"}}
+    assert run["originalUriBaseIds"] == {
+        "SCANROOT": {"uri": tmp_path.as_uri() + "/"},
+        "SKILLROOT": {"uri": "one/", "uriBaseId": "SCANROOT"},
+    }
     assert run["results"] == []
 
 
@@ -6160,3 +6166,42 @@ def test_cli_baseline_uses_local_cache_for_provider_excluded_findings(tmp_path: 
     written = yaml.safe_load(out.read_text(encoding="utf-8"))
     assert [entry["file"] for entry in written["fingerprints"]] == [".hidden.md"]
     assert len(written["fingerprints"][0]["hash"]) == len("sha256:") + 64
+
+
+def test_recursive_sarif_uses_real_encoded_directory_and_preserves_external_sources(
+    tmp_path: Path,
+) -> None:
+    from urllib.parse import unquote, urljoin, urlsplit
+
+    skill = SkillDirectory(tmp_path / "my+skill café", "safe display", "my_skill_café")
+    child = _recursive_child_with_results("one")
+    artifact = child["sarif_report"]["runs"][0]["results"][0]["locations"][0]["physicalLocation"][
+        "artifactLocation"
+    ]
+    artifact.update(
+        {
+            "uri": "external/abc/SKILL.md",
+            "properties": {
+                "sourceIdentity": "external/abc",
+                "sourceUrl": "https://example.test/skill",
+            },
+        }
+    )
+    completeness = cli._multi_skill_analysis_completeness(
+        total_skills=1,
+        complete_skills=1,
+        partial_skills=0,
+        failed_skills=0,
+        omitted_skills=0,
+        limitations=[],
+    )
+    payload = cli._multi_skill_sarif_report([skill], [child], completeness)
+    validate_sarif_report(payload)
+    run = payload["runs"][0]
+    bases = run["originalUriBaseIds"]
+    assert bases["SKILLROOT"] == {"uri": "my%2Bskill%20caf%C3%A9/", "uriBaseId": "SCANROOT"}
+    locations = run["results"][0]["locations"]
+    assert "uriBaseId" not in locations[0]["physicalLocation"]["artifactLocation"]
+    local = locations[1]["physicalLocation"]["artifactLocation"]
+    resolved = urljoin(urljoin(bases["SCANROOT"]["uri"], bases["SKILLROOT"]["uri"]), local["uri"])
+    assert Path(unquote(urlsplit(resolved).path)) == skill.path / "scripts/helper.py"
