@@ -642,6 +642,35 @@ class TestBuiltInCryptominerRules:
         findings = _run_builtin(content, "loader.js")
         assert _has_rule(findings, "crypto_coinjacking")
 
+    def test_wasm_instantiate_with_cryptonight_glue_is_coinjacking(self):
+        content = (
+            "WebAssembly.instantiate(wasmBinary,info);"
+            "var _cryptonight_hash=Module._cryptonight_hash=function(){};\n"
+        )
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_hash_cn_cwrap_is_coinjacking(self):
+        content = 'WebAssembly.instantiate(x).then(()=>{ Module.cwrap("hash_cn", "number", ["number"]) })\n'
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_cryptonight_wasm_fetch_is_coinjacking(self):
+        content = (
+            'WebAssembly.instantiateStreaming(fetch("cryptonight.wasm"))'
+            ".then(o=>{ exports.cn_hash(blob,nonce++) })\n"
+        )
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
+    def test_wasm_instantiate_with_randomx_calculate_hash_is_coinjacking(self):
+        content = (
+            "WebAssembly.instantiate(randomxWasm)"
+            ".then(m=>m.instance.exports.randomx_calculate_hash(blob))\n"
+        )
+        findings = _run_builtin(content, "loader.js")
+        assert _has_rule(findings, "crypto_coinjacking")
+
 
 # ── Built-in agent skill rules ────────────────────────────────────────
 

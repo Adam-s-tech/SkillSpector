@@ -94,7 +94,7 @@ rule crypto_coinjacking
         $coin_imp      = "coin-imp" nocase
         $minero_cc     = "minero.cc" nocase
         $monerominer   = "monerominer" nocase
-        $wasm_miner    = /WebAssembly\.instantiate.*\b(mine|miner|mining)\b/
+        $wasm_miner    = /WebAssembly\.instantiate.*(\b(mine|miner|mining)\b|cryptonight|randomx|cn_?hash|hash_?cn|hashrate)/
     condition:
         any of them
 }
