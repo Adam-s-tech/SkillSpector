@@ -391,11 +391,20 @@ _BINARY_EXECUTABLE_MAGICS = (
 )
 
 _TYPESCRIPT_DECLARATION_SUFFIXES = (".d.ts", ".d.cts", ".d.mts")
+_TYPESCRIPT_AMBIENT_MEMBER = (
+    r"(?:export\s+)?(?:"
+    r"interface\s+[A-Za-z_$][\w$]*(?:\s*<[^{}]*>)?\s*\{[^{}]*\}|"
+    r"type\s+[A-Za-z_$][\w$]*(?:\s*<[^;{}]*>)?\s*=\s*[^;{}]+;|"
+    r"(?:const|let|var)\s+[A-Za-z_$][\w$]*(?:\s*:\s*[^;{}]+)?\s*;|"
+    r"function\s+[A-Za-z_$][\w$]*\s*\([^{}]*\)\s*:\s*[^;{}]+;|"
+    r"class\s+[A-Za-z_$][\w$]*\s*\{[^{}]*\}"
+    r")"
+)
 _TYPESCRIPT_DECLARATION_FILE = re.compile(
     r"\A\s*(?:"
     r"(?:declare\s+(?:const|let|var|function|class)\b[^;{}]*;)|"
-    r"(?:(?:declare\s+)?(?:export\s+)?namespace\s+[A-Za-z_$][\w$]*\s*\{[^{}]*\}\s*;?)|"
-    r"(?:(?:declare\s+)?module\s+(?:[\"'][^\"']+[\"']|[A-Za-z_$][\w$]*)\s*\{[^{}]*\}\s*;?)|"
+    rf"(?:declare\s+(?:export\s+)?namespace\s+[A-Za-z_$][\w$]*\s*\{{(?:\s*{_TYPESCRIPT_AMBIENT_MEMBER})*\s*\}}\s*;?)|"
+    rf"(?:declare\s+module\s+(?:[\"'][^\"']+[\"']|[A-Za-z_$][\w$]*)\s*\{{(?:\s*{_TYPESCRIPT_AMBIENT_MEMBER})*\s*\}}\s*;?)|"
     r"(?:(?:export\s+)?interface\s+[A-Za-z_$][\w$]*(?:\s*<[^{}]*>)?\s*\{[^{}]*\}\s*;?)|"
     r"(?:(?:export\s+)?type\s+[A-Za-z_$][\w$]*(?:\s*<[^;{}]*>)?\s*=\s*[^;{}]+;)|"
     r"(?:import\s+type\b[^;{}]+;)|"

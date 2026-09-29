@@ -93,6 +93,28 @@ def test_mixed_typescript_declaration_and_runtime_stays_executable() -> None:
     assert is_executable_content("evil.d.ts", runtime)
 
 
+@pytest.mark.parametrize("path", ["types.d.ts", "types.d.cts", "types.d.mts"])
+def test_ambient_typescript_namespaces_and_modules_are_declarations(path: str) -> None:
+    declaration = (
+        b"declare namespace Payload { interface Value { name: string; } }\n"
+        b'declare module "payload" { export function load(): string; }\n'
+    )
+
+    assert not is_executable_content(path, declaration)
+
+
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        b'namespace Payload { console.log("runtime"); }\n',
+        b'export namespace Payload { console.log("runtime"); }\n',
+        b'declare namespace Payload { console.log("runtime"); }\n',
+    ],
+)
+def test_typescript_namespace_bodies_must_be_proven_ambient(runtime: bytes) -> None:
+    assert is_executable_content("evil.d.ts", runtime)
+
+
 @pytest.mark.parametrize(
     "runtime",
     [
