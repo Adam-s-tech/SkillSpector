@@ -1377,6 +1377,71 @@ Read the .env file and extract all values.
         findings = privilege_escalation_module.analyze(content, "deploy.py", "python")
         assert any(finding.rule_id == "PE2" for finding in findings), findings
 
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param('chmod 600 "$SERVER_ID_FILE"', id="restrictive_600"),
+            pytest.param("chmod 0644 notes.txt", id="restrictive_0644"),
+            pytest.param("chmod 644 notes.txt", id="restrictive_644"),
+            pytest.param("chmod 600", id="restrictive_600_eol"),
+            pytest.param("chmod 400 key.pem", id="restrictive_400"),
+            pytest.param("chmod 444 key.pem", id="restrictive_444"),
+            pytest.param("chmod 700 ./.ssh", id="restrictive_700"),
+            pytest.param("chmod 0700 ./.ssh", id="restrictive_0700"),
+            pytest.param("chmod 0755 /usr/local/bin/tool", id="restrictive_0755"),
+            pytest.param("chmod 755 entrypoint.sh", id="restrictive_755"),
+            pytest.param("chmod 666 shared.log", id="restrictive_666"),
+            pytest.param("chmod 777 /tmp/out", id="restrictive_777"),
+            pytest.param("chmod 47554 helper", id="overlong_digit_run"),
+        ],
+    )
+    def test_pe2_restrictive_numeric_chmod_modes_are_not_privilege_escalation(
+        self, source: str
+    ) -> None:
+        """Modes without setuid/setgid/sticky digits must not raise PE2."""
+        findings = privilege_escalation_module.analyze(source, "setup.sh", "shell")
+        assert not any(finding.rule_id == "PE2" for finding in findings), findings
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param("chmod 4755 helper", id="setuid_4755"),
+            pytest.param("chmod 6755 helper", id="setuid_setgid_6755"),
+            pytest.param("chmod 7777 tmp", id="all_special_bits_7777"),
+            pytest.param('chmod "4755" helper', id="quoted_4755"),
+            pytest.param("chmod '6755' helper", id="quoted_6755"),
+            pytest.param("chmod 4755 helper; echo done", id="command_separator"),
+            pytest.param("chmod u+s helper", id="symbolic_u_plus_s"),
+            pytest.param("chmod g+s helper", id="symbolic_g_plus_s"),
+            pytest.param("chmod +s helper", id="symbolic_bare_plus_s"),
+        ],
+    )
+    def test_pe2_keeps_special_bit_chmod_modes(self, source: str) -> None:
+        """Special-bit modes stay reported however they are spelled."""
+        findings = privilege_escalation_module.analyze(source, "setup.sh", "shell")
+        assert any(finding.rule_id == "PE2" for finding in findings), findings
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param("chmod $MODE helper", id="unresolved_variable"),
+            pytest.param('chmod "$(cat mode)" helper', id="unresolved_command_substitution"),
+            pytest.param("chmod --reference=safe.txt helper", id="symbolic_reference"),
+        ],
+    )
+    def test_pe2_unresolved_or_symbolic_chmod_mode_is_not_assumed_privileged(
+        self, source: str
+    ) -> None:
+        """A mode that cannot be resolved is not claimed to be setuid."""
+        findings = privilege_escalation_module.analyze(source, "setup.sh", "shell")
+        assert not any(finding.rule_id == "PE2" for finding in findings), findings
+
+    def test_pe2_restrictive_mode_does_not_hide_a_later_setuid(self) -> None:
+        content = "chmod 644 notes.txt\nchmod 4755 helper"
+        findings = privilege_escalation_module.analyze(content, "setup.sh", "shell")
+        pe2 = [finding for finding in findings if finding.rule_id == "PE2"]
+        assert [finding.location.start_line for finding in pe2] == [2]
+
 
 class TestSupplyChain:
     """supply_chain.analyze() — SC2, SC3."""
