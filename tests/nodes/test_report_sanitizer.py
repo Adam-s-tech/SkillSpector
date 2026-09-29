@@ -37,7 +37,6 @@ def _dirty_finding() -> Finding:
         start_line=5,
         remediation="redact \x1b[1mnow\x1b[0m",
         context="line with \x07 bell and \x1b[0m reset",
-        pattern="pattern \x1b[31mred\x1b[0m\x00",
     )
 
 
@@ -96,7 +95,6 @@ def test_report_redacts_url_credentials_from_every_finding_field(fmt: str, schem
         file="setup.sh",
         start_line=1,
         finding=url,
-        pattern=url,
         explanation=url,
         remediation=url,
         context=url,
