@@ -331,6 +331,8 @@ class TestLP3AllowedTools:
             assert lp1.remediation is not None
             assert "'allowed-tools'" in lp1.remediation
             assert "'permissions'" not in lp1.remediation
+            assert "Add a tool" not in lp1.remediation
+            assert "preapproval" in lp1.remediation
 
     def test_allowed_tools_fully_covered_no_lp1(self):
         """allowed-tools: [Bash] + only shell code → no LP1 (capability is covered)."""

@@ -618,9 +618,10 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
                             break
                     confidence = _clamp(0.55 if capability in test_only_caps else 0.75)
                     remediation = (
-                        f"Add a tool that covers the '{capability}' capability to the "
-                        "'allowed-tools' frontmatter field in SKILL.md, or remove "
-                        "the code that requires it."
+                        f"Review whether the '{capability}' capability is required and "
+                        "whether the host runtime policy permits it. Remove code that "
+                        "does not need the capability; do not broaden 'allowed-tools' "
+                        "preapproval solely to silence this finding."
                         if allowed_tools
                         else f"Add the '{capability}' capability to the MCP server manifest's "
                         "'permissions' list, or remove the code that requires it."
