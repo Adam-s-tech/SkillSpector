@@ -814,9 +814,11 @@ files are scanned normally.
 
 ### Stage 2: LLM Semantic Analysis (Optional)
 - Evaluates context and intent
-- Filters false positives
+- Enriches findings with contextual explanations and helps identify false positives
+- Deterministic findings are retained when the model does not confirm or dispute them
 - Provides human-readable explanations
-- Improves precision to ~87%
+- Results depend on the configured model and prompt context; Stage 2 does not replace
+  deterministic findings or guarantee a particular precision rate
 
 The LLM prompt includes anti-jailbreak protections to prevent malicious skills from manipulating the analysis.
 
