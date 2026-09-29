@@ -66,6 +66,9 @@ _DYNAMIC_SHELL_WORD_SENTINEL = "\ue001"
 _RUNTIME_SHELL_PARAMETER_SENTINEL = "\ue002"
 _SIMPLE_BRACED_PARAMETER_RE = re.compile(r"\$\{(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])\}")
 _SHELL_DELIMITER_WORD_RE = re.compile(r"[^$'\"`\\(){}<>#;|&!\s]++")
+# A ``#`` that starts a word begins a shell comment. Quoting is not tracked, so
+# ``echo "a # b"`` also matches; callers only use this to restrict ownership.
+_SHELL_COMMENT_START_RE = re.compile(r"(?<![^\s;&|()<>])#")
 _PERL_LITERAL_PRINT_RE = re.compile(
     r"^[ \t]*+print\b(?:[ \t]++(?:STDOUT|STDERR)\b)?[ \t]*+(?P<paren>\()?[ \t]*+"
     r"(?P<literal>\"(?:\\[\\\"'nrt]|[^\\\"$@`\r\n])*+\""
@@ -1422,10 +1425,13 @@ def _parse_shell_command_word(
     *,
     check_runtime: Callable[[], None] | None = None,
     owned_word_positions: set[int] | None = None,
+    enclosing_delimiter: str | None = None,
 ) -> _ShellCommandWord | None:
     runtime_check = check_runtime or (lambda: None)
     output: list[str] = []
-    wrapper_quote = _command_wrapper_quote(content, start) if content[start] in "$`" else None
+    wrapper_quote = enclosing_delimiter or (
+        _command_wrapper_quote(content, start) if content[start] in "$`" else None
+    )
     quote: str | None = None
     ansi_c_quote = False
     dynamic = False
@@ -1602,6 +1608,11 @@ def _parse_shell_command_word(
                 cursor = parameter_end
                 continue
         elif character == "`":
+            if enclosing_delimiter == "`":
+                # The enclosing substitution ends here; this is not an opener.
+                if owned_word_positions is not None:
+                    owned_word_positions.add(cursor)
+                break
             substitution_end = _skip_backtick_substitution(
                 content,
                 cursor,
@@ -1768,6 +1779,9 @@ def _has_shell_command_word_exhaustion(
             backtick_end_cache,
             check_runtime=check_runtime,
             owned_word_positions=candidate_word_positions,
+            enclosing_delimiter=(
+                _assignment_value_wrapper(content, start) if assignment_quote else None
+            ),
         )
         if parsed is None:
             substitution_start = (
@@ -1805,9 +1819,21 @@ def _has_shell_command_word_exhaustion(
             if unresolved_end - start > _SHELL_COMMAND_WORD_CHARS:
                 return True
             continue
-        line_start = content.rfind("\n", 0, start) + 1
-        if not content[line_start:start].lstrip().startswith("#"):
-            owned_word_positions.update(candidate_word_positions)
+        # Comments end at a newline, and a quote after ``=`` in prose or host
+        # source may be mis-paired. Such a word cannot own a later line.
+        confined_word = "\n" in content[start : parsed.end] and (
+            assignment_quote
+            or _SHELL_COMMENT_START_RE.search(content, content.rfind("\n", 0, start) + 1, start)
+            is not None
+        )
+        if not confined_word:
+            # A quote that opens a runtime-selected word stays an independent
+            # candidate, so a mis-paired claim cannot hide its operands.
+            owned_word_positions.update(
+                position
+                for position in candidate_word_positions
+                if content[position + 1 : position + 2] not in ("$", "`")
+            )
         # Only executable nested substitutions retain independent command
         # positions. A plain dynamic data argument still owns its inner bytes;
         # revisiting those as commands would turn quoted printf data into code.
@@ -1824,8 +1850,12 @@ def _has_shell_command_word_exhaustion(
             or "$" not in raw_word
             or not any(marker in raw_word for marker in ("$(", "`"))
             or simple_backtick_parameter
-        ):
+        ) and not (assignment_quote and confined_word):
             parsed_through = max(parsed_through, parsed.end)
+        if assignment_quote:
+            # An assignment value never names the command, and main never
+            # parsed this position, so it only claims ownership.
+            continue
         if parsed.limited:
             return True
         if parsed.dynamic and may_have_destructive_outer_operands:
@@ -2106,6 +2136,19 @@ def _command_wrapper_quote(content: str, command_start: int) -> str | None:
         backslashes += 1
         cursor -= 1
     return content[command_start - 1] if backslashes % 2 == 0 else None
+
+
+def _assignment_value_wrapper(content: str, value_start: int) -> str | None:
+    """Return an unescaped quote or backtick directly enclosing an assignment."""
+    name_start = value_start - 1
+    if name_start > 0 and content[name_start - 1] == "+":
+        name_start -= 1
+    while name_start > 0 and (
+        content[name_start - 1] == "_"
+        or (content[name_start - 1].isascii() and content[name_start - 1].isalnum())
+    ):
+        name_start -= 1
+    return _command_wrapper_quote(content, name_start)
 
 
 def _perl_literal_print_shell_text(
