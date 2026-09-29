@@ -1086,6 +1086,8 @@ class TestTP4DescriptionBehaviorMismatch:
         tp4 = [f for f in result["findings"] if f.rule_id == "TP4"]
         assert len(tp4) >= 1
         assert tp4[0].severity in {"HIGH", "MEDIUM"}
+        assert tp4[0].pattern == "Description-Behavior Mismatch"
+        assert tp4[0].finding == tp4[0].message
 
     def test_no_mismatch_clean(self, monkeypatch: pytest.MonkeyPatch):
         _mock_tp4_structured_llm(monkeypatch, [{"is_mismatch": False}])
