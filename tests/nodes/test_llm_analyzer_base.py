@@ -2556,7 +2556,7 @@ class TestLLMAnalysisResult:
             start_line=3,
         ).to_finding("SKILL.md")
 
-        assert finding.category == "Security"
+        assert finding.category == "Data Exfiltration"
         assert finding.pattern == "Natural-language credential exfiltration"
         assert finding.finding == "Natural-language credential exfiltration"
 

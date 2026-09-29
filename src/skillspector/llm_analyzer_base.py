@@ -70,7 +70,6 @@ from skillspector.llm_utils import (
 from skillspector.logging_config import get_logger
 from skillspector.model_info import get_max_input_tokens
 from skillspector.models import Finding
-from skillspector.nodes.analyzers.pattern_defaults import get_category, get_pattern_name
 
 logger = get_logger(__name__)
 
@@ -615,17 +614,22 @@ class LLMFinding(BaseModel):
 
     def to_finding(self, file: str) -> Finding:
         """Convert to a :class:`Finding` for the graph state."""
+        # Keep the core LLM module independent from analyzer discovery.  The
+        # discovery package imports this module while loading analyzers.
+        from skillspector.nodes.analyzers.pattern_defaults import get_category, get_pattern_name
+
+        message = self.message[:4096]
         return Finding(
             rule_id=self.rule_id,
-            message=self.message,
+            message=message,
             severity=self.severity,
             confidence=self.confidence,
             file=file,
             start_line=self.start_line,
             end_line=self.end_line,
             category=get_category(self.rule_id),
-            pattern=self.message or get_pattern_name(self.rule_id),
-            finding=self.message,
+            pattern=message or get_pattern_name(self.rule_id),
+            finding=message,
             explanation=self.explanation,
             remediation=self.remediation,
         )
