@@ -84,6 +84,9 @@ def test_value_expansions_and_assignments_are_not_reconstruction(
         'eval "RESULT=$(printf \'%s\' "$X")"',
         'alias rmall="$(printf \'%s\' "$X")"',
         "echo ES_URL=$(printf '%s' \"$X\")",
+        "RESULT=$(printf 'r%s' m); $RESULT -rf /",
+        "RESULT=$(printf 'r%s' m)\n\"$RESULT\" -rf /",
+        "export TOOL=$(printf 'r%s' m) && $TOOL -rf /",
     ],
     ids=[
         "runtime-format-default",
@@ -104,6 +107,9 @@ def test_value_expansions_and_assignments_are_not_reconstruction(
         "eval-string",
         "alias-definition",
         "argument-is-not-assignment",
+        "assigned-value-used-as-command",
+        "assigned-value-quoted-command",
+        "exported-value-used-as-command",
     ],
 )
 def test_code_evaluating_expansions_and_commands_stay_partial(content: str) -> None:

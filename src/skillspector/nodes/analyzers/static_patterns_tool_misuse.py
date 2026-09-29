@@ -1461,6 +1461,9 @@ def _previous_word_end(content: str, start: int) -> int | None:
 def _is_assignment_word(content: str, start: int) -> bool:
     """Return whether ``start`` begins a prefix assignment word or its quoted value."""
     word_start = start
+    # The exhaustion sweep already skips the checks for a quote after ``=``.
+    # Recognizing it here keeps the parser consistent for any caller and avoids
+    # evaluating printf reconstruction whose result would be discarded.
     if 0 < start < len(content) and content[start] in "'\"" and content[start - 1] == "=":
         word_start = start - 1
         if word_start > 0 and content[word_start - 1] == "+":
@@ -1503,7 +1506,8 @@ def _parse_shell_command_word(
     runtime_check = check_runtime or (lambda: None)
     # The shell recognizes ``NAME=value`` before expansion and never runs the
     # value as the command name. Its substitutions keep their own candidate
-    # positions, so only this word's printf reconstruction check is skipped.
+    # positions, and a later ``$NAME`` command word is still checked, so only
+    # this word's printf reconstruction check is skipped.
     assignment = _is_assignment_word(content, start)
 
     def reconstructs_command(
