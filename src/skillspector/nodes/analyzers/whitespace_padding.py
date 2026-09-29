@@ -74,6 +74,11 @@ _REPLACEMENT_CHAR_DENSITY_THRESHOLD = 0.30
 # Markdown fenced-code delimiter (``` or ~~~ with optional leading indentation).
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
+# A GFM table delimiter cell contains at least one dash, optionally surrounded
+# by alignment colons. Only a proven table may exempt ordinary ASCII cell
+# padding from P9.
+_TABLE_DELIMITER_CELL_RE = re.compile(r"^\s*:?-+:?\s*$")
+
 # Line-boundary characters/sequences that count as line separators when splitting
 # content into logical lines. Beyond ASCII LF, this includes CR / CRLF and the
 # Unicode line/paragraph separators U+2028 / U+2029 / U+0085 (NEL) — all of which
@@ -294,6 +299,7 @@ def _detect_horizontal(
     runs: list[PaddingRun] = []
     # Only the markdown path needs fence flags; skip building the list otherwise.
     fence_flags = _fence_line_flags(lines) if file_type == "markdown" else None
+    table_lines = _markdown_table_lines(lines) if file_type == "markdown" else set()
     for idx, line in enumerate(lines):
         if fence_flags is not None and fence_flags[idx]:
             continue
@@ -309,6 +315,17 @@ def _detect_horizontal(
                 k += 1
             run_len = k - start
             if run_len >= HORIZONTAL_RUN_CHARS:
+                # Spaces used to right-align a cell are visible table layout,
+                # not hidden content. Keep unusual padding, malformed tables,
+                # and runs that are not immediately before a cell boundary
+                # visible to the detector.
+                if (
+                    idx in table_lines
+                    and line[start:k] == " " * run_len
+                    and k < line_len
+                    and line[k] == "|"
+                ):
+                    continue
                 start_offset = line_offset + start
                 followed_by_content = k < line_len
                 summary = summarize_run(line[start:k])
@@ -324,6 +341,44 @@ def _detect_horizontal(
                     )
                 )
     return runs
+
+
+def _markdown_table_cells(line: str) -> list[str] | None:
+    """Return cells for an outer-pipe Markdown row, or ``None`` otherwise."""
+    stripped = line.strip()
+    if not (stripped.startswith("|") and stripped.endswith("|")):
+        return None
+    return stripped[1:-1].split("|")
+
+
+def _markdown_table_lines(lines: list[str]) -> set[int]:
+    """Return lines belonging to syntactically proven GFM tables.
+
+    Requiring a header followed by a delimiter row keeps arbitrary pipe-heavy
+    prose and malformed/off-screen layouts on the fail-closed detection path.
+    """
+    table_lines: set[int] = set()
+    index = 0
+    while index + 1 < len(lines):
+        header = _markdown_table_cells(lines[index])
+        delimiter = _markdown_table_cells(lines[index + 1])
+        if (
+            header
+            and delimiter
+            and len(header) == len(delimiter)
+            and all(_TABLE_DELIMITER_CELL_RE.fullmatch(cell) for cell in delimiter)
+        ):
+            table_lines.update((index, index + 1))
+            index += 2
+            while index < len(lines):
+                row = _markdown_table_cells(lines[index])
+                if row is None or len(row) != len(header):
+                    break
+                table_lines.add(index)
+                index += 1
+            continue
+        index += 1
+    return table_lines
 
 
 def _detect_block_and_ratio(content: str) -> list[PaddingRun]:
