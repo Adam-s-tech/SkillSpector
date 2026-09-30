@@ -720,6 +720,14 @@ def validated_json_string_closers(text: str, check_runtime: Callable[[], None] |
     return {end - 1 for _, end in validated_json_string_spans(text, check_runtime)}
 
 
+def _is_quoted_mapping_key(text: str, start: int) -> bool:
+    """Return whether a directive-like word is inside a structural mapping key."""
+    if start == 0 or text[start - 1] not in _ALL_QUOTE_CHARACTERS:
+        return False
+    prefix = text[: start - 1].rstrip()
+    return bool(prefix) and prefix[-1] in "{[,"
+
+
 def _quoted_directives(
     text: str,
     check_runtime: Callable[[], None] | None,
@@ -737,6 +745,8 @@ def _quoted_directives(
     for match in pattern.finditer(text):
         if check_runtime is not None:
             check_runtime()
+        if unsupported_header and _is_quoted_mapping_key(text, match.start()):
+            continue
         if match.end() - 1 in json_value_closers:
             continue
         quote = _QUOTE_OPEN_TO_CLOSE[match.group("quote")]
