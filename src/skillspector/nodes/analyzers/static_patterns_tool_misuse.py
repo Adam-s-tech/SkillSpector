@@ -64,7 +64,23 @@ _DESTRUCTIVE_COMMAND_BASENAMES = frozenset({"rm", "del", "erase"})
 _QUOTED_GLOB_SENTINEL = "\ue000"
 _DYNAMIC_SHELL_WORD_SENTINEL = "\ue001"
 _RUNTIME_SHELL_PARAMETER_SENTINEL = "\ue002"
-_SIMPLE_BRACED_PARAMETER_RE = re.compile(r"\$\{(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])\}")
+# A braced expansion head whose result depends only on parameter values: an
+# optional length prefix, a name with an optional literal subscript or a
+# numeric/special parameter, then the closing brace or a value operator.
+# Indirection, arithmetic subscripts, substring offsets, ``@`` transformations,
+# zsh flags and ``${ cmd; }`` can evaluate code, so they do not match. The
+# documentation placeholder ``${...}`` is a bad substitution in every shell.
+_VALUE_PARAMETER_EXPANSION_HEAD_RE = re.compile(
+    r"\$\{(?:#?(?:[A-Za-z_][A-Za-z0-9_]*(?:\[(?:[@*]|[0-9]+)\])?|[0-9]+|[@*#?$!-])"
+    r"(?:\}|:?[-=?+]|##?|%%?|/[/#%]?|\^\^?|,,?)|\.\.\.\})"
+)
+_VALUE_PARAMETER_EXPANSION_START_RE = re.compile(r"\$\{")
+_EXECUTABLE_EXPANSION_MARKERS = ("`", "$(", "$[", "<(", ">(")
+_SHELL_ASSIGNMENT_PREFIX_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
+_SHELL_ASSIGNMENT_NAME_CHARACTERS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+)
+_SHELL_CLAUSE_BOUNDARY_CHARACTERS = "\r\n;|&(){}`"
 _SHELL_DELIMITER_WORD_RE = re.compile(r"[^$'\"`\\(){}<>#;|&!\s]++")
 # A ``#`` that starts a word begins a shell comment. Quoting is not tracked, so
 # ``echo "a # b"`` also matches; callers only use this to restrict ownership.
@@ -93,6 +109,9 @@ _POWERSHELL_REPLACE_EXPRESSION_RE = re.compile(
 _SHELL_COMMAND_STRING_SHELLS = frozenset({"sh", "ash", "bash", "dash", "ksh", "yash", "zsh"})
 _SHELL_COMMAND_STRING_ARGUMENTS = 32
 _SHELL_CLAUSE_PREFIX_WORDS = frozenset({"do", "else", "elif", "then", "time", "!"})
+_SHELL_ASSIGNMENT_PREFIX_WORDS = _SHELL_CLAUSE_PREFIX_WORDS | frozenset(
+    {"if", "while", "until", "export", "local", "declare", "readonly", "typeset"}
+)
 _SHELL_REDIRECTION_PREFIX_RE = re.compile(r"(?:[0-9]+)?(?:&>>?|<>|>>?|<<-?|>&|<&|[<>])")
 _RECURSIVE_OPTION_SOURCE_RE = re.compile(r"-(?:[A-Za-z]*[rR]|-recursive)")
 _FORCE_OPTION_SOURCE_RE = re.compile(r"-(?:[A-Za-z]*f|-force)")
@@ -935,14 +954,27 @@ def _printf_invocation_arguments(
     return True, arguments
 
 
+def _is_value_parameter_expansion(content: str, start: int, end: int) -> bool:
+    """Return whether a braced expansion and its nested expansions substitute only values."""
+    expansion = content[start:end]
+    if any(marker in expansion for marker in _EXECUTABLE_EXPANSION_MARKERS):
+        return False
+    return all(
+        _VALUE_PARAMETER_EXPANSION_HEAD_RE.match(expansion, nested.start()) is not None
+        for nested in _VALUE_PARAMETER_EXPANSION_START_RE.finditer(expansion)
+    )
+
+
 def _invocation_expansion_marker(content: str, start: int, end: int) -> str:
     """Distinguish runtime-only parameters from possible command reconstruction."""
     if content.startswith("$(", start) or (
-        content.startswith("${", start)
-        and _SIMPLE_BRACED_PARAMETER_RE.fullmatch(content, start, end) is None
+        content.startswith("${", start) and not _is_value_parameter_expansion(content, start, end)
     ):
-        # Complex parameter expansions may contain nested command substitutions.
+        # Other parameter expansions may contain nested command substitutions
+        # or evaluate a value as code.
         return _DYNAMIC_SHELL_WORD_SENTINEL
+    # ``${NAME:-default}``, ``${ARR[@]}`` and similar forms select the same
+    # runtime value as ``$NAME`` and need the same printf invocation evidence.
     return _RUNTIME_SHELL_PARAMETER_SENTINEL
 
 
@@ -1416,6 +1448,50 @@ def _skip_backtick_substitution(
     )
 
 
+def _previous_word_end(content: str, start: int) -> int | None:
+    """Return where the previous word in this clause ends, or ``None`` at a clause start."""
+    cursor = start
+    while cursor > 0 and content[cursor - 1] in " \t":
+        cursor -= 1
+    if cursor == 0 or content[cursor - 1] in _SHELL_CLAUSE_BOUNDARY_CHARACTERS:
+        return None
+    return cursor
+
+
+def _is_assignment_word(content: str, start: int) -> bool:
+    """Return whether ``start`` begins a prefix assignment word or its quoted value."""
+    word_start = start
+    # The exhaustion sweep already skips the checks for a quote after ``=``.
+    # Recognizing it here keeps the parser consistent for any caller and avoids
+    # evaluating printf reconstruction whose result would be discarded.
+    if 0 < start < len(content) and content[start] in "'\"" and content[start - 1] == "=":
+        word_start = start - 1
+        if word_start > 0 and content[word_start - 1] == "+":
+            word_start -= 1
+        while word_start > 0 and content[word_start - 1] in _SHELL_ASSIGNMENT_NAME_CHARACTERS:
+            word_start -= 1
+    prefix = _SHELL_ASSIGNMENT_PREFIX_RE.match(content, word_start)
+    if prefix is None or (word_start != start and prefix.end() != start):
+        return False
+    # The shell recognizes assignments only before the command name. After
+    # ``alias``, ``echo`` or a path prefix, ``NAME=value`` is an ordinary word.
+    previous_end = _previous_word_end(content, word_start)
+    if previous_end is None:
+        return True
+    if previous_end == word_start:
+        return False
+    previous_start = previous_end
+    while (
+        previous_start > 0
+        and content[previous_start - 1] not in " \t" + _SHELL_CLAUSE_BOUNDARY_CHARACTERS
+    ):
+        previous_start -= 1
+    return (
+        content[previous_start:previous_end] in _SHELL_ASSIGNMENT_PREFIX_WORDS
+        and _previous_word_end(content, previous_start) is None
+    )
+
+
 def _parse_shell_command_word(
     content: str,
     start: int,
@@ -1428,6 +1504,23 @@ def _parse_shell_command_word(
     enclosing_delimiter: str | None = None,
 ) -> _ShellCommandWord | None:
     runtime_check = check_runtime or (lambda: None)
+    # The shell recognizes ``NAME=value`` before expansion and never runs the
+    # value as the command name. Its substitutions keep their own candidate
+    # positions, and a later ``$NAME`` command word is still checked, so only
+    # this word's printf reconstruction check is skipped.
+    assignment = _is_assignment_word(content, start)
+
+    def reconstructs_command(
+        substitution_start: int, substitution_end: int, *, backtick: bool = False
+    ) -> bool:
+        return not assignment and _is_printf_substitution(
+            content,
+            substitution_start,
+            substitution_end,
+            backtick=backtick,
+            check_runtime=runtime_check,
+        )
+
     output: list[str] = []
     wrapper_quote = enclosing_delimiter or (
         _command_wrapper_quote(content, start) if content[start] in "$`" else None
@@ -1481,12 +1574,7 @@ def _parse_shell_command_word(
                     if static_value is None:
                         output.append("$()")
                         dynamic = True
-                        limited = limited or _is_printf_substitution(
-                            content,
-                            cursor,
-                            substitution_end,
-                            check_runtime=runtime_check,
-                        )
+                        limited = limited or reconstructs_command(cursor, substitution_end)
                     else:
                         output.append(static_value)
                     cursor = substitution_end
@@ -1531,12 +1619,8 @@ def _parse_shell_command_word(
                 if static_value is None:
                     output.append("$()")
                     dynamic = True
-                    limited = limited or _is_printf_substitution(
-                        content,
-                        cursor,
-                        substitution_end,
-                        backtick=True,
-                        check_runtime=runtime_check,
+                    limited = limited or reconstructs_command(
+                        cursor, substitution_end, backtick=True
                     )
                 else:
                     output.append(static_value)
@@ -1579,12 +1663,7 @@ def _parse_shell_command_word(
             if static_value is None:
                 output.append("$()")
                 dynamic = True
-                limited = limited or _is_printf_substitution(
-                    content,
-                    cursor,
-                    substitution_end,
-                    check_runtime=runtime_check,
-                )
+                limited = limited or reconstructs_command(cursor, substitution_end)
             else:
                 output.append(static_value)
             cursor = substitution_end
@@ -1633,13 +1712,7 @@ def _parse_shell_command_word(
             if static_value is None:
                 output.append("$()")
                 dynamic = True
-                limited = limited or _is_printf_substitution(
-                    content,
-                    cursor,
-                    substitution_end,
-                    backtick=True,
-                    check_runtime=runtime_check,
-                )
+                limited = limited or reconstructs_command(cursor, substitution_end, backtick=True)
             else:
                 output.append(static_value)
             cursor = substitution_end
