@@ -131,7 +131,7 @@ def test_gemini_provider_makes_live_structured_request() -> None:
     _skip_without_env("GOOGLE_CLOUD_PROJECT")
 
     model = _model_from_env("SKILLSPECTOR_GEMINI_TEST_MODEL", GeminiProvider.DEFAULT_MODEL)
-    llm = GeminiProvider().create_chat_model(model, max_tokens=128, timeout=60)
+    llm = GeminiProvider().create_chat_model(model, max_tokens=1024, timeout=60)
     assert llm is not None
 
     result = llm.with_structured_output(GeminiStructuredResult).invoke(
