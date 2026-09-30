@@ -165,7 +165,7 @@ _PASSIVE_REMOVAL_SUFFIX_RE: Final = re.compile(
     re.IGNORECASE,
 )
 _UNSUPPORTED_QUOTED_DIRECTIVE_START_RE: Final = re.compile(
-    rf"\b(?:{_FALLBACK_REMOVAL_VERBS})\b[^.!?\n]{{0,{_MAX_FALLBACK_PREFIX_CHARS}}}?"
+    rf"(?<![-\w])\b(?:{_FALLBACK_REMOVAL_VERBS})\b[^.!?\n]{{0,{_MAX_FALLBACK_PREFIX_CHARS}}}?"
     rf"(?P<quote>[{_QUOTE_OPEN_CLASS}])",
     re.IGNORECASE,
 )
