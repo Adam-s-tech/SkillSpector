@@ -30,11 +30,13 @@ Node and analyze() in one module.
 
 from __future__ import annotations
 
+import ast
 import codecs
 import io
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import tomllib
@@ -1711,7 +1713,10 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
                 file_type,
                 line_starts,
             )
-            if _is_safe_supply_chain_pattern(mt):
+            if _is_safe_supply_chain_pattern(mt) or _interpreter_reads_stdin_as_data(
+                content,
+                match.start(),
+            ):
                 adj = min(confidence, 0.15)
                 sev = Severity.LOW
             else:
@@ -1890,6 +1895,177 @@ def _is_trusted_source(text: str) -> bool:
 def _is_safe_supply_chain_pattern(text: str) -> bool:
     """Return True when the matched text is a known-safe install or fetch pattern."""
     return _is_trusted_source(text) or bool(_SAFE_INSTALL_PATTERN.search(text))
+
+
+# A fetched program supplied on the interpreter command line leaves the
+# download as data on stdin.  Every other shape stays HIGH.
+_MAX_SC2_LOGICAL_LINE_CHARS = 4_096
+_PYTHON_SAFE_CALLS = frozenset(
+    {
+        "bool",
+        "dict",
+        "float",
+        "int",
+        "json.dump",
+        "json.dumps",
+        "json.load",
+        "json.loads",
+        "len",
+        "list",
+        "print",
+        "str",
+        "sys.stderr.write",
+        "sys.stdin.buffer.read",
+        "sys.stdin.buffer.readline",
+        "sys.stdin.read",
+        "sys.stdin.readline",
+        "sys.stdout.write",
+    }
+)
+_PYTHON_DANGEROUS = re.compile(
+    r"\b(?:exec|eval|compile|execfile|__import__|getattr|setattr|delattr|"
+    r"globals|locals|vars|open|input|system|popen|spawn\w*|runpy|pickle|"
+    r"marshal|dill|shelve|importlib|subprocess|os)\b|__"
+)
+_NODE_SAFE_IDENTIFIERS = frozenset(
+    (
+        "Array Boolean Buffer JSON Math Number Object String async await body catch chunk "
+        "chunks concat console const data else end error false filter forEach from function "
+        "if in info item items join length let lines log map new null of on once parse pipe "
+        "process push read reduce result return slice split stderr stdin stdout stringify "
+        "text toString trim true typeof undefined value values var warn write"
+    ).split()
+)
+
+
+def _sc2_logical_command(content: str, match_start: int) -> str | None:
+    """Return the shell logical line containing *match_start*, if it starts it."""
+    line_start = 0
+    for separator in LOGICAL_LINE_BREAK.finditer(content, 0, match_start):
+        if separator.start() > 0 and content[separator.start() - 1] == "\\":
+            continue
+        line_start = separator.end()
+
+    line_end = len(content)
+    for separator in LOGICAL_LINE_BREAK.finditer(content, match_start):
+        if separator.start() > 0 and content[separator.start() - 1] == "\\":
+            continue
+        line_end = separator.start()
+        break
+
+    # Only lower a pipeline that begins the logical line.  This rejects
+    # command substitutions, wrappers such as ``bash -c``, and ``eval``.
+    if content[line_start:match_start].strip():
+        return None
+    command = content[line_start:line_end]
+    if len(command) > _MAX_SC2_LOGICAL_LINE_CHARS:
+        return None
+    return re.sub(r"\\\r?\n", " ", command)
+
+
+def _shell_tokens(command: str) -> list[str] | None:
+    """Tokenize a conservative subset of shell syntax, or return None."""
+    if re.search(r"[`$]", command):
+        return None
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="|&;<>()")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        return None
+
+
+def _dotted_name(node: ast.expr) -> str | None:
+    """Return a dotted name for ``a.b.c`` expressions, otherwise None."""
+    parts: list[str] = []
+    current = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name):
+        return None
+    parts.append(current.id)
+    return ".".join(reversed(parts))
+
+
+def _python_stdin_script_is_data_only(script: str) -> bool:
+    """Return whether a Python ``-c`` script only treats stdin as data."""
+    if not script.strip() or len(script) > _MAX_SC2_LOGICAL_LINE_CHARS:
+        return False
+    try:
+        tree = ast.parse(script, mode="exec")
+    except (SyntaxError, ValueError):
+        return False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name not in {"json", "sys"} or alias.asname for alias in node.names):
+                return False
+        elif isinstance(node, ast.ImportFrom):
+            return False
+        elif isinstance(node, (ast.Name, ast.Attribute)):
+            value = node.id if isinstance(node, ast.Name) else node.attr
+            if _PYTHON_DANGEROUS.search(value):
+                return False
+        elif isinstance(node, ast.Call):
+            name = _dotted_name(node.func)
+            if name is None or name not in _PYTHON_SAFE_CALLS:
+                return False
+    return True
+
+
+def _node_stdin_script_is_data_only(script: str) -> bool:
+    """Return whether a Node ``-e`` script only parses stdin as JSON data."""
+    if not script.strip() or len(script) > _MAX_SC2_LOGICAL_LINE_CHARS:
+        return False
+    if re.search(r"[`$]", script) or "JSON.parse" not in script or "process.stdin" not in script:
+        return False
+    identifiers = set(re.findall(r"[A-Za-z_$][A-Za-z0-9_$]*", script))
+    return all(
+        len(identifier) == 1 or identifier in _NODE_SAFE_IDENTIFIERS for identifier in identifiers
+    )
+
+
+def _interpreter_reads_stdin_as_data(content: str, match_start: int) -> bool:
+    """Return whether the piped-to interpreter receives a command-line program."""
+    command = _sc2_logical_command(content, match_start)
+    if command is None:
+        return False
+    tokens = _shell_tokens(command)
+    if tokens is None:
+        return False
+    if any(
+        token in {"|&", "||", "&&", ";", "&", "<", ">", ">>", "<<", "(", ")"} for token in tokens
+    ):
+        return False
+    pipes = [index for index, token in enumerate(tokens) if token == "|"]
+    if len(pipes) != 1:
+        return False
+
+    pipe_index = pipes[0]
+    fetch = tokens[:pipe_index]
+    tail = tokens[pipe_index + 1 :]
+    if not fetch or fetch[0].lower() not in {"curl", "wget"}:
+        return False
+    if tail[:1] == ["sudo"]:
+        tail = tail[1:]
+    if not tail:
+        return False
+
+    interpreter = tail[0].lower()
+    args = tail[1:]
+    if interpreter in {"python", "python3"}:
+        return args == ["-m", "json.tool"] or (
+            len(args) == 2 and args[0] == "-c" and _python_stdin_script_is_data_only(args[1])
+        )
+    if interpreter == "node":
+        return (
+            len(args) == 2
+            and args[0] in {"-e", "--eval"}
+            and _node_stdin_script_is_data_only(args[1])
+        )
+    return False
 
 
 # ---------------------------------------------------------------------------
