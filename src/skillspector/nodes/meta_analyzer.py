@@ -76,6 +76,7 @@ logger = get_logger(__name__)
 class MetaAnalyzerFinding(BaseModel):
     """A single finding evaluated by the meta-analyzer LLM (filter/enrich mode)."""
 
+    finding_id: str | None = Field(default=None, description="Exact static Finding ID.")
     pattern_id: str = Field(description="The static analysis pattern ID (e.g. E2, P1)")
     start_line: int | None = Field(
         default=None,
@@ -192,9 +193,8 @@ For each static analysis finding, evaluate:
 4. Does the skill context make this more or less dangerous?
    (e.g., "cyanide" in a cooking skill = CRITICAL, in a chemistry education skill = maybe OK)
 
-IMPORTANT: Include the start_line from each finding's Location field (the number
-after the colon, e.g. for "Location: file.md:15" use start_line=15). This is
-required to distinguish multiple findings with the same pattern ID in one file.
+IMPORTANT: Copy each finding's Finding ID exactly and include its start_line.
+The Finding ID distinguishes multiple findings that share a pattern ID and line.
 
 For findings you confirm as vulnerabilities, provide an explanation of WHY
 this is dangerous and remediation steps for HOW to fix the issue.
@@ -235,7 +235,8 @@ def _format_findings_for_prompt(findings: list[Finding]) -> str:
         matched = redact_text(f.matched_text or f.message)
         ctx = redact_text(f.context or "")
         lines.append(
-            f"{i}. [{f.rule_id}] {message} ({f.severity})\n"
+            f"{i}. Finding ID: {f.finding_id}\n"
+            f"   [{f.rule_id}] {message} ({f.severity})\n"
             f"   Location: {loc}\n"
             f"   Matched: {matched}\n"
             f"   Context:\n   " + "\n   ".join(ctx.splitlines())
@@ -290,6 +291,47 @@ def _passthrough_with_defaults(findings: list[Finding]) -> list[Finding]:
         )
         for f in findings
     ]
+
+
+def _review_evidence(
+    finding: Finding, outcome: str, item: dict[str, Any] | None = None
+) -> dict[str, object]:
+    """Preserve original evidence while recording the per-finding review outcome."""
+    evidence = {**finding.evidence, "llm_review_outcome": outcome}
+    if item is not None:
+        for field in ("confidence", "explanation", "remediation"):
+            value = item.get(field)
+            if value not in (None, ""):
+                evidence[f"llm_review_{field}"] = value
+    return evidence
+
+
+def _review_outcome(item: dict[str, Any]) -> str:
+    if not item.get("is_vulnerability", False):
+        return "disagreed"
+    return "low-confidence" if float(item.get("confidence", 0.7)) < 0.6 else "confirmed"
+
+
+def _mark_unconfirmed(
+    finding: Finding, outcome: str, item: dict[str, Any] | None = None
+) -> Finding:
+    tags = list(finding.tags)
+    if "llm-unconfirmed" not in tags:
+        tags.append("llm-unconfirmed")
+    return replace(
+        finding,
+        remediation=finding.remediation or get_remediation(finding.rule_id),
+        tags=tags,
+        code_snippet=finding.code_snippet or finding.context,
+        evidence=_review_evidence(finding, outcome, item),
+        occurrences=list(finding.occurrences),
+    )
+
+
+def _mark_review_failed(finding: Finding) -> Finding:
+    if finding.rule_id in _AUTHORITATIVE_DETERMINISTIC_RULES:
+        return finding
+    return _mark_unconfirmed(finding, "failed")
 
 
 # ---------------------------------------------------------------------------
@@ -382,25 +424,27 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
         findings receive an annotation tag; confirmed findings may gain an
         explanation or higher confidence, but are never downgraded.
         """
-        _enrichment = tuple[str, str, float]
-        confirmed_granular: dict[tuple[str, str, int, int | None], _enrichment] = {}
+        assessments_by_id: dict[str, dict[str, Any]] = {}
+        confirmed_granular: dict[tuple[str, str, int, int | None], dict[str, Any]] = {}
         # Fallback index keyed without end_line (see lookup below). Issue #67.
-        confirmed_by_start: dict[tuple[str, str, int], _enrichment] = {}
-        confirmed_coarse: dict[tuple[str, str], _enrichment] = {}
+        confirmed_by_start: dict[tuple[str, str, int], dict[str, Any]] = {}
+        confirmed_coarse: dict[tuple[str, str], dict[str, Any]] = {}
+        exact_counts: dict[tuple[str, str, int, int | None], int] = {}
+        for finding in findings:
+            key = (finding.file, finding.rule_id, finding.start_line, finding.end_line)
+            exact_counts[key] = exact_counts.get(key, 0) + 1
 
         for batch, llm_items in batch_results:
             for item in llm_items:
-                pattern_id = item.get("pattern_id")
-                if not pattern_id or not item.get("is_vulnerability", False):
+                finding_id = item.get("finding_id")
+                if finding_id:
+                    assessments_by_id[str(finding_id)] = item
                     continue
-                conf = float(item.get("confidence", 0.7))
-                if conf < 0.6:
+                pattern_id = item.get("pattern_id")
+                if not pattern_id:
                     continue
                 pattern_id = str(pattern_id)
-                explanation = (item.get("explanation") or "").strip() or get_explanation(pattern_id)
-                remediation = (item.get("remediation") or "").strip() or get_remediation(pattern_id)
                 file_path = item.get("_file", batch.file_path)
-                enrichment: _enrichment = (explanation, remediation, conf)
                 start_line = item.get("start_line")
                 if start_line is not None:
                     end_line = item.get("end_line")
@@ -411,10 +455,10 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
                             int(start_line),
                             int(end_line) if end_line is not None else None,
                         )
-                    ] = enrichment
-                    confirmed_by_start[(file_path, pattern_id, int(start_line))] = enrichment
+                    ] = item
+                    confirmed_by_start[(file_path, pattern_id, int(start_line))] = item
                 else:
-                    confirmed_coarse[(file_path, pattern_id)] = enrichment
+                    confirmed_coarse[(file_path, pattern_id)] = item
 
         result: list[Finding] = []
         for f in findings:
@@ -425,38 +469,44 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
             start_only_key = (f.file, f.rule_id, f.start_line, None)
             coarse_key = (f.file, f.rule_id)
             start_key = (f.file, f.rule_id, f.start_line) if f.start_line is not None else None
-            if exact_key in confirmed_granular:
-                expl, rem, conf = confirmed_granular[exact_key]
-            elif start_only_key in confirmed_granular:
-                expl, rem, conf = confirmed_granular[start_only_key]
-            elif f.end_line is None and start_key is not None and start_key in confirmed_by_start:
-                expl, rem, conf = confirmed_by_start[start_key]
-            elif coarse_key in confirmed_coarse:
-                expl, rem, conf = confirmed_coarse[coarse_key]
-            else:
-                unconfirmed_tags = list(f.tags)
-                if "llm-unconfirmed" not in unconfirmed_tags:
-                    unconfirmed_tags.append("llm-unconfirmed")
-                result.append(
-                    replace(
-                        f,
-                        remediation=f.remediation or get_remediation(f.rule_id),
-                        tags=unconfirmed_tags,
-                        code_snippet=f.code_snippet or f.context,
-                        evidence=dict(f.evidence),
-                        occurrences=list(f.occurrences),
-                    )
-                )
+            assessment = assessments_by_id.get(f.finding_id)
+            if assessment is None:
+                if exact_counts.get(exact_key, 0) > 1:
+                    assessment = None
+                elif exact_key in confirmed_granular:
+                    assessment = confirmed_granular[exact_key]
+                elif start_only_key in confirmed_granular:
+                    assessment = confirmed_granular[start_only_key]
+                elif (
+                    f.end_line is None and start_key is not None and start_key in confirmed_by_start
+                ):
+                    assessment = confirmed_by_start[start_key]
+                else:
+                    assessment = confirmed_coarse.get(coarse_key)
+            if assessment is None:
+                result.append(_mark_unconfirmed(f, "missing"))
                 continue
+            outcome = _review_outcome(assessment)
+            if outcome != "confirmed":
+                result.append(_mark_unconfirmed(f, outcome, assessment))
+                continue
+            pattern_id = str(assessment.get("pattern_id") or f.rule_id)
+            explanation = (assessment.get("explanation") or "").strip() or get_explanation(
+                pattern_id
+            )
+            remediation = (assessment.get("remediation") or "").strip() or get_remediation(
+                pattern_id
+            )
+            confidence = float(assessment.get("confidence", 0.7))
             result.append(
                 replace(
                     f,
-                    message=expl,
-                    confidence=max(f.confidence, conf),
-                    remediation=rem,
-                    explanation=expl,
+                    message=explanation,
+                    confidence=max(f.confidence, confidence),
+                    remediation=remediation,
+                    explanation=explanation,
                     code_snippet=f.code_snippet or f.context,
-                    evidence=dict(f.evidence),
+                    evidence=_review_evidence(f, outcome, assessment),
                     occurrences=list(f.occurrences),
                 )
             )
@@ -618,6 +668,7 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
         return {
             "findings": [],
             "effective_finding_ids": [],
+            "meta_review_required": False,
             "inspection_ledger": [],
             "analyzer_status_events": [
                 analyzer_status_event(
@@ -640,6 +691,7 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
         response: MetaAnalyzerResponse = {
             "findings": findings,
             "effective_finding_ids": _effective_finding_ids(findings),
+            "meta_review_required": True,
             "inspection_ledger": events,
             "analyzer_status_events": [analyzer_status_for_events("meta_analyzer", events)],
         }
@@ -659,6 +711,7 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
         return {
             "findings": filtered,
             "effective_finding_ids": _effective_finding_ids(filtered),
+            "meta_review_required": False,
             "inspection_ledger": [],
             "analyzer_status_events": [
                 analyzer_status_event(
@@ -697,6 +750,7 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
         return {
             "findings": filtered_local,
             "effective_finding_ids": _effective_finding_ids(filtered_local),
+            "meta_review_required": False,
             "inspection_ledger": events,
             "analyzer_status_events": [analyzer_status_for_events("meta_analyzer", events)],
         }
@@ -784,7 +838,7 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
                 len(unanalysed),
                 len({f.file for f in unanalysed}),
             )
-            filtered.extend(_fallback_filtered(unanalysed))
+            filtered.extend(_mark_review_failed(finding) for finding in unanalysed)
         filtered_local = _fallback_filtered(local_only_findings)
         filtered.extend(filtered_local)
 
@@ -799,6 +853,7 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
         return {
             "findings": filtered,
             "effective_finding_ids": _effective_finding_ids(filtered),
+            "meta_review_required": True,
             "inspection_ledger": ledger_events,
             "analyzer_status_events": [status],
             "llm_call_log": [
@@ -814,6 +869,10 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
         if isinstance(e, LLMRuntimeLimitError):
             filtered = _passthrough_with_defaults(findings)
             eligible_ids = {finding.finding_id for finding in eligible_findings}
+            filtered = [
+                _mark_review_failed(finding) if finding.finding_id in eligible_ids else finding
+                for finding in filtered
+            ]
             filtered_eligible = [
                 finding for finding in filtered if finding.finding_id in eligible_ids
             ]
@@ -827,6 +886,7 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
             return {
                 "findings": filtered,
                 "effective_finding_ids": _effective_finding_ids(filtered),
+                "meta_review_required": True,
                 "inspection_ledger": ledger_events,
                 "analyzer_status_events": [
                     analyzer_status_for_events("meta_analyzer", ledger_events)
@@ -847,6 +907,11 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
             raise
         logger.warning("LLM call failed, passing all findings through (fail-closed): %s", e)
         filtered = _passthrough_with_defaults(findings)
+        eligible_ids = {finding.finding_id for finding in eligible_findings}
+        filtered = [
+            _mark_review_failed(finding) if finding.finding_id in eligible_ids else finding
+            for finding in filtered
+        ]
         filtered_local = [finding for finding in filtered if finding.finding_id in local_only_ids]
         if post_response_value_error:
             ledger_events, status = _meta_ledger_response(
@@ -866,6 +931,7 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
         return {
             "findings": filtered,
             "effective_finding_ids": _effective_finding_ids(filtered),
+            "meta_review_required": True,
             "inspection_ledger": ledger_events,
             "analyzer_status_events": [status],
             "llm_call_log": [llm_call_record("meta_analyzer", ok=False, error=str(e))],
