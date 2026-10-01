@@ -856,6 +856,51 @@ class TestStructuredOutputMethod:
         llm.supports_tool_choice_values = ("auto", "any", "tool")  # type: ignore[attr-defined]
         assert bind_structured_output(llm, dict, "m", provider=_PlainProvider()) is llm
 
+    def test_chat_openai_with_tool_choice_disabled_asks_for_the_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from langchain_core.outputs import ChatResult
+        from langchain_openai import ChatOpenAI
+
+        from skillspector.providers.openai_compatible import OpenAICompatibleProvider
+
+        monkeypatch.delenv("SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD", raising=False)
+        monkeypatch.delenv("SKILLSPECTOR_MODEL_REGISTRY", raising=False)
+
+        class Verdict(BaseModel):
+            summary: str
+
+        requests: list[tuple[str, dict]] = []
+        answers = [
+            AIMessage(content="Verdict: looks fine."),
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "Verdict", "args": {"summary": "ok"}, "id": "call_1"}],
+            ),
+        ]
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            requests.append((messages[-1].content, kwargs))
+            return ChatResult(generations=[ChatGeneration(message=answers.pop(0))])
+
+        monkeypatch.setattr(ChatOpenAI, "_generate", _generate)
+        llm = ChatOpenAI(
+            model="spark-x2.5",
+            api_key="sk-test",
+            base_url="https://maas-token-api.cn-huabei-1.xf-yun.com/v2",
+            disabled_params={"tool_choice": None},
+        )
+        chain = bind_structured_output(
+            llm, Verdict, "spark-x2.5", provider=OpenAICompatibleProvider()
+        )
+        with pytest.raises(StructuredOutputParseError, match="Verdict"):
+            chain.invoke("analyse this")  # type: ignore[attr-defined]
+        assert chain.invoke("analyse this") == Verdict(summary="ok")  # type: ignore[attr-defined]
+        prompt, request = requests[0]
+        assert prompt.startswith("analyse this\n\n") and "calling the Verdict tool" in prompt
+        assert "tool_choice" not in request
+        assert request["tools"][0]["function"]["name"] == "Verdict"
+
     def test_cli_adapter_accepts_the_method_keyword(self) -> None:
         from skillspector.llm_utils import AgentCLIChatModel
 

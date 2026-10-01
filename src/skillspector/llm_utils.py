@@ -403,16 +403,28 @@ def bind_structured_output(
     """``llm.with_structured_output(schema)`` with the method *model* needs.
 
     A chat model restricted to ``toolChoice`` ``auto`` (Bedrock models that
-    reject a forced tool call) is bound with LangChain's default tool method,
-    the prompt asks for the tool call explicitly, and a prose answer raises
-    :class:`StructuredOutputParseError`, which the analyzers retry like any
-    other malformed structured response.
+    reject a forced tool call, or a ``ChatOpenAI`` with ``tool_choice``
+    disabled) is bound with a tool method, the prompt asks for the tool call
+    explicitly, and a prose answer raises :class:`StructuredOutputParseError`,
+    which the analyzers retry like any other malformed structured response.
     """
     kwargs = structured_output_kwargs(model, provider)
     structured = llm.with_structured_output(schema, **kwargs)  # type: ignore[attr-defined]
-    if kwargs or getattr(llm, "supports_tool_choice_values", None) != ("auto",):
+    if kwargs.get("method", "function_calling") != "function_calling" or not (
+        _restricts_tool_choice_to_auto(llm)
+    ):
         return structured
     return _require_tool_call(structured, schema)
+
+
+def _restricts_tool_choice_to_auto(llm: object) -> bool:
+    """``True`` when *llm* binds tools without forcing a ``tool_choice``."""
+    if getattr(llm, "supports_tool_choice_values", None) == ("auto",):
+        return True
+    disabled = getattr(llm, "disabled_params", None)
+    return (
+        isinstance(disabled, dict) and "tool_choice" in disabled and disabled["tool_choice"] is None
+    )
 
 
 _TOOL_CALL_INSTRUCTION = (
