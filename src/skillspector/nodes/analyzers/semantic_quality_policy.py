@@ -127,6 +127,13 @@ Do NOT flag an operation if:
 **For markdown files:** flag when the skill description omits warnings about
 behaviours that could affect user data, privacy, or system integrity.
 
+Do NOT flag markdown if:
+- A tool, command, or API is only listed or described (for example in a tool
+  catalog, a quick-reference table, or a list of available tools) and the text
+  does not instruct the agent to perform that operation.  Naming a bulk or
+  destructive tool does not select an action; only an instruction to use it
+  does.
+
 Use rule ID **SQP-2** for all missing-warning findings.
 
 ---
@@ -143,6 +150,11 @@ Do NOT flag if:
 - The skill explicitly offers the user a language/locale choice or opt-in
 - The locale constraint is clearly documented and justified (e.g. a
   region-specific compliance tool)
+- The phrase is a readability idiom, not a language requirement: "in plain
+  English", "in plain language", "in simple terms", "in layman's terms".
+  These ask for clarity.  Only an explicit instruction to produce output in a
+  specific natural language or locale (e.g. "always respond in Japanese") is
+  a language requirement.
 
 Use rule ID **SQP-3** for all policy-violation findings.
 

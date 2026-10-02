@@ -394,6 +394,20 @@ class TestPromptContent:
     def test_analyzer_id_is_correct(self) -> None:
         assert ANALYZER_ID == "semantic_quality_policy"
 
+    def test_prompt_exempts_listed_tools_from_sqp2(self) -> None:
+        # Naming a tool in a catalog or reference table does not select an
+        # operation (#669); only an instruction to use it does.
+        prompt = " ".join(ANALYZER_PROMPT.split())
+        assert "tool catalog" in prompt
+        assert "does not select an action" in prompt
+
+    def test_prompt_exempts_readability_idioms_from_sqp3(self) -> None:
+        # "In plain English" asks for clarity, not a language (#669).
+        prompt = " ".join(ANALYZER_PROMPT.split())
+        assert "readability idiom" in prompt
+        assert '"in plain English"' in prompt
+        assert "always respond in Japanese" in prompt
+
 
 # ---------------------------------------------------------------------------
 # Helpers for fixture-based tests
@@ -973,6 +987,62 @@ class TestSqp3Clean:
         skill_dir = _SQP_FIXTURES / "sqp3_clean"
         if not skill_dir.is_dir():
             pytest.skip("sqp3_clean fixture not present")
+
+        file_cache = _build_file_cache(skill_dir)
+        state: dict = {"file_cache": file_cache}
+
+        from skillspector.llm_analyzer_base import LLMAnalyzerBase
+
+        orig_init = LLMAnalyzerBase.__init__
+
+        def _patched_init(self_inner, *args, **kwargs):
+            orig_init(self_inner, *args, **kwargs)
+            self_inner._structured_llm.ainvoke = AsyncMock(
+                return_value=LLMAnalysisResult(findings=[])
+            )
+
+        with patch.object(LLMAnalyzerBase, "__init__", _patched_init):
+            result = node(state)
+
+        assert result["findings"] == []
+
+
+class TestSqp2ToolCatalogClean:
+    """SQP-2: a tool listed in a quick-reference table is not an instruction (#669)."""
+
+    @patch(MOCK_PATCH_TARGET, _mock_get_chat_model)
+    def test_listed_tool_not_flagged(self) -> None:
+        skill_dir = _SQP_FIXTURES / "sqp2_tool_catalog_clean"
+        if not skill_dir.is_dir():
+            pytest.skip("sqp2_tool_catalog_clean fixture not present")
+
+        file_cache = _build_file_cache(skill_dir)
+        state: dict = {"file_cache": file_cache}
+
+        from skillspector.llm_analyzer_base import LLMAnalyzerBase
+
+        orig_init = LLMAnalyzerBase.__init__
+
+        def _patched_init(self_inner, *args, **kwargs):
+            orig_init(self_inner, *args, **kwargs)
+            self_inner._structured_llm.ainvoke = AsyncMock(
+                return_value=LLMAnalysisResult(findings=[])
+            )
+
+        with patch.object(LLMAnalyzerBase, "__init__", _patched_init):
+            result = node(state)
+
+        assert result["findings"] == []
+
+
+class TestSqp3PlainEnglishClean:
+    """SQP-3: "in plain English" is a readability idiom, not a language rule (#669)."""
+
+    @patch(MOCK_PATCH_TARGET, _mock_get_chat_model)
+    def test_readability_idiom_not_flagged(self) -> None:
+        skill_dir = _SQP_FIXTURES / "sqp3_plain_english_clean"
+        if not skill_dir.is_dir():
+            pytest.skip("sqp3_plain_english_clean fixture not present")
 
         file_cache = _build_file_cache(skill_dir)
         state: dict = {"file_cache": file_cache}
