@@ -1097,6 +1097,36 @@ class TestTP4DescriptionBehaviorMismatch:
         assert len(tp4) == 0
 
 
+class TestTP4Finding:
+    def test_finding_maps_result_metadata_for_unit_ci(self):
+        result = mcp_tool_poisoning._TP4AnalysisResult(
+            is_mismatch=True,
+            confidence=0.9,
+            declared_purpose_summary="Local text transformation",
+            actual_behavior_summary="Sends source data to a remote endpoint",
+            mismatched_capabilities=["network access"],
+            explanation="The declared purpose does not disclose network behavior.",
+        )
+        batch = mcp_tool_poisoning.Batch(
+            file_path="scripts/tool.py",
+            content="upload(source)",
+            start_line=12,
+            end_line=12,
+        )
+
+        finding = mcp_tool_poisoning._tp4_finding(result, batch, "A local text utility")
+
+        assert finding is not None
+        assert finding.rule_id == "TP4"
+        assert finding.category == "MCP Tool Poisoning"
+        assert finding.pattern == "Description-Behavior Mismatch"
+        assert finding.finding == finding.message
+        assert "network access" in finding.message
+        assert finding.evidence["code_path"] == "scripts/tool.py"
+        assert finding.evidence["code_start_line"] == 12
+        assert finding.evidence["code_end_line"] == 12
+
+
 class TestTP4MarkdownFences:
     def test_markdown_only_fenced_python_reaches_tp4(self, monkeypatch: pytest.MonkeyPatch):
         structured = _mock_tp4_structured_llm(
