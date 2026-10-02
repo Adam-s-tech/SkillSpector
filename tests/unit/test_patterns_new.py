@@ -2689,6 +2689,18 @@ class TestSupplyChainHelpers:
     def test_is_typosquat_exact_match_returns_none(self) -> None:
         assert sc_mod._is_typosquat("requests", {"requests"}) is None
 
+    def test_is_typosquat_length_difference_boundary(self):
+        # The length-difference skip is exact (OSA distance >= length difference).
+        # A difference of 2 is still within max_distance, a difference of 3 is not;
+        # a ">" -> ">=" slip in the skip would make the first assertion fail.
+        assert sc_mod._is_typosquat("requestsxx", {"requests"}) == "requests"
+        assert sc_mod._is_typosquat("requestsxxx", {"requests"}) is None
+
+    def test_popular_sets_are_frozensets(self):
+        # Module-level target sets are frozensets, so the target cache hits on identity.
+        assert isinstance(sc_mod._POPULAR_PYPI, frozenset)
+        assert isinstance(sc_mod._POPULAR_NPM, frozenset)
+
     @pytest.mark.parametrize(
         "package,popular",
         [
