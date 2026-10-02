@@ -579,10 +579,12 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
                         "Without declared permissions the skill's intent is opaque and cannot be validated."
                     ),
                     remediation=(
-                        "Declare the skill's tool scope: for Claude Code / Agent Skills "
-                        "SKILL.md, list the tools the skill may invoke in the "
-                        "'allowed-tools' frontmatter field; for MCP server manifests, "
-                        "add a 'permissions' list naming the required capabilities."
+                        "Clarify the skill's intended tool scope and review how the host "
+                        "runtime enforces it. For Claude Code / Agent Skills SKILL.md, "
+                        "'allowed-tools' records preapproved tools, not a permission ceiling; "
+                        "add a tool only when it is independently approved as necessary, "
+                        "not to silence this finding. For MCP server manifests, use a "
+                        "'permissions' list naming the required capabilities."
                     ),
                 )
             )
@@ -626,6 +628,16 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
                         else f"Add the '{capability}' capability to the MCP server manifest's "
                         "'permissions' list, or remove the code that requires it."
                     )
+                    explanation = (
+                        f"The skill uses '{capability}' capability that is not covered by "
+                        "the declared 'allowed-tools' preapproval. Review the host runtime's "
+                        "actual enforcement policy; this declaration alone does not establish "
+                        "a permission ceiling."
+                        if allowed_tools
+                        else f"The skill uses '{capability}' capability that is not covered by "
+                        "the declared MCP 'permissions' list. Review the server's actual "
+                        "authorization policy."
+                    )
                     budget.emit(
                         Finding(
                             rule_id="LP1",
@@ -638,11 +650,7 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
                             file=primary_file,
                             category=_CATEGORY,
                             tags=list(_TAGS),
-                            explanation=(
-                                f"The skill uses '{capability}' capability that is not listed in "
-                                "its permissions. This may indicate deceptive intent or missing "
-                                "permission declarations."
-                            ),
+                            explanation=explanation,
                             remediation=remediation,
                         )
                     )
