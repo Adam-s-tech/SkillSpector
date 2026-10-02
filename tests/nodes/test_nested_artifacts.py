@@ -71,14 +71,55 @@ def _document_members(**extra: bytes) -> dict[str, bytes]:
 def test_typescript_declaration_files_are_not_executable_by_name_alone() -> None:
     declaration = b"export interface Options { retries?: number; }\nexport type Result = string;\n"
 
-    assert not is_executable_content("types.d.cts", declaration)
-    assert not is_executable_content("types.d.mts", declaration)
+    assert not is_executable_content("types.d.cts", declaration, complete_content=True)
+    assert not is_executable_content("types.d.mts", declaration, complete_content=True)
 
 
 def test_runtime_code_in_typescript_declaration_named_file_stays_executable() -> None:
     runtime = b'declare const marker: string;\nrequire("child_process").execSync(marker);\n'
 
     assert is_executable_content("evil.d.cts", runtime)
+
+
+def test_declaration_exemption_requires_complete_content() -> None:
+    declaration = b"export {}"
+
+    assert is_executable_content("types.d.mts", declaration)
+    assert not is_executable_content("types.d.mts", declaration, complete_content=True)
+
+
+def test_runtime_default_import_named_type_is_not_a_type_only_import() -> None:
+    runtime = b'import type from "./payload.mjs";\n'
+
+    assert is_executable_content("evil.d.mts", runtime, complete_content=True)
+
+
+def test_typescript_declaration_span_cannot_cross_asi_line_break() -> None:
+    runtime = b'export type Config = string\nconsole.log("RUNTIME")\n;'
+
+    assert is_executable_content("evil.d.cts", runtime, complete_content=True)
+
+
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        b'type A = "/*";\nconsole.log("RUNTIME");\ntype B = "*/";\n',
+        b'type A = "//"; console.log("RUNTIME")\ntype B = string;\n',
+        b'type A = `unterminated;\nconsole.log("RUNTIME");',
+    ],
+)
+def test_comment_markers_inside_literals_cannot_hide_runtime(runtime: bytes) -> None:
+    assert is_executable_content("evil.d.ts", runtime, complete_content=True)
+
+
+def test_typical_typescript_emitted_declaration_file_is_inert() -> None:
+    declaration = (
+        b"export interface Options { retries?: number; }\n"
+        b"export declare function load(options: Options): Promise<void>;\n"
+        b"export type Result = string;\n"
+    )
+
+    assert not is_executable_content("types.d.ts", declaration, complete_content=True)
 
 
 def test_typescript_side_effect_import_in_declaration_named_file_stays_executable() -> None:
@@ -100,7 +141,7 @@ def test_ambient_typescript_namespaces_and_modules_are_declarations(path: str) -
         b'declare module "payload" { export function load(): string; }\n'
     )
 
-    assert not is_executable_content(path, declaration)
+    assert not is_executable_content(path, declaration, complete_content=True)
 
 
 @pytest.mark.parametrize(
