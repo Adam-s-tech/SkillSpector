@@ -648,6 +648,61 @@ def test_recursive_min_coverage_allows_omitted_skills_at_threshold_zero(
     assert payload["skills"][-1]["omitted_count"] == 2
 
 
+@pytest.mark.parametrize(("threshold", "exit_code"), [(90, 1), (0, None)])
+def test_recursive_min_coverage_counts_symlinked_skills_as_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    threshold: float,
+    exit_code: int | None,
+) -> None:
+    skills = [SkillDirectory(tmp_path / name, name, name) for name in ("one", "two")]
+    output = tmp_path / "combined.json"
+    monkeypatch.setattr(
+        cli.graph,
+        "invoke",
+        lambda *_args, **_kwargs: _bounded_recursive_result("one", finding_count=0),
+    )
+
+    expectation = pytest.raises(typer.Exit) if exit_code else nullcontext()
+    with expectation as exit_info:
+        _scan_multi_skill(
+            MultiSkillDetectionResult(
+                is_multi_skill=True, skills=skills, omitted_symlink_entries=1
+            ),
+            FormatChoice.json,
+            output,
+            no_llm=True,
+            min_coverage=threshold,
+        )
+
+    if exit_info is not None:
+        assert exit_info.value.exit_code == exit_code
+    assert json.loads(output.read_text(encoding="utf-8"))["skills_omitted"] == 1
+
+
+def test_recursive_min_coverage_keeps_execution_failure_exit_two(tmp_path: Path) -> None:
+    skills = [SkillDirectory(tmp_path / name, name, name) for name in ("one", "two")]
+    output = tmp_path / "combined.json"
+    with patch(
+        "skillspector.cli.graph.invoke",
+        side_effect=[
+            _bounded_recursive_result("one", finding_count=0),
+            {"report_body": "{}", "risk_score": 0, "execution_successful": False},
+        ],
+    ):
+        with pytest.raises(typer.Exit) as exit_info:
+            _scan_multi_skill(
+                MultiSkillDetectionResult(is_multi_skill=True, skills=skills),
+                FormatChoice.json,
+                output,
+                no_llm=True,
+                min_coverage=90,
+            )
+
+    assert exit_info.value.exit_code == 2
+    assert output.exists()
+
+
 def test_recursive_min_coverage_ignores_aggregate_completeness_for_partial_children(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

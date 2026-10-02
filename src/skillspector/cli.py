@@ -2929,8 +2929,8 @@ def _scan_multi_skill(
         aggregate_limitations.append(
             f"{unscanned_skill_count} recursive skill(s) unscanned after an aggregate limit"
         )
-        if min_coverage is not None and min_coverage > 0:
-            coverage_failed = True
+    if skills_omitted_total and min_coverage is not None and min_coverage > 0:
+        coverage_failed = True
     aggregate_limitations = list(dict.fromkeys(aggregate_limitations))[:256]
     aggregate_completeness = _multi_skill_analysis_completeness(
         total_skills=len(skills) + omitted_symlink_entry_count,
