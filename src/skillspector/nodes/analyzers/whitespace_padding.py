@@ -299,7 +299,7 @@ def _detect_horizontal(
     runs: list[PaddingRun] = []
     # Only the markdown path needs fence flags; skip building the list otherwise.
     fence_flags = _fence_line_flags(lines) if file_type == "markdown" else None
-    table_lines = _markdown_table_lines(lines) if file_type == "markdown" else set()
+    table_boundaries = _markdown_table_boundaries(lines) if file_type == "markdown" else {}
     for idx, line in enumerate(lines):
         if fence_flags is not None and fence_flags[idx]:
             continue
@@ -315,16 +315,10 @@ def _detect_horizontal(
                 k += 1
             run_len = k - start
             if run_len >= HORIZONTAL_RUN_CHARS:
-                # Spaces used to right-align a cell are visible table layout,
-                # not hidden content. Keep unusual padding, malformed tables,
-                # and runs that are not immediately before a cell boundary
-                # visible to the detector.
-                if (
-                    idx in table_lines
-                    and line[start:k] == " " * run_len
-                    and k < line_len
-                    and line[k] == "|"
-                ):
+                # Exempt ASCII cell padding only when its closing pipe occupies
+                # the matching delimiter-row boundary. Misaligned table padding
+                # can still push content off-screen and remains a finding.
+                if k in table_boundaries.get(idx, set()) and line[start:k] == " " * run_len:
                     continue
                 start_offset = line_offset + start
                 followed_by_content = k < line_len
@@ -351,13 +345,14 @@ def _markdown_table_cells(line: str) -> list[str] | None:
     return stripped[1:-1].split("|")
 
 
-def _markdown_table_lines(lines: list[str]) -> set[int]:
-    """Return lines belonging to syntactically proven GFM tables.
+def _markdown_table_boundaries(lines: list[str]) -> dict[int, set[int]]:
+    """Return row pipe positions aligned with the proven delimiter row.
 
     Requiring a header followed by a delimiter row keeps arbitrary pipe-heavy
-    prose and malformed/off-screen layouts on the fail-closed detection path.
+    prose on the fail-closed detection path. A row pipe is exemptible only
+    when it has the same ordinal and character column as its delimiter-row pipe.
     """
-    table_lines: set[int] = set()
+    aligned_boundaries: dict[int, set[int]] = {}
     index = 0
     while index + 1 < len(lines):
         header = _markdown_table_cells(lines[index])
@@ -368,17 +363,32 @@ def _markdown_table_lines(lines: list[str]) -> set[int]:
             and len(header) == len(delimiter)
             and all(_TABLE_DELIMITER_CELL_RE.fullmatch(cell) for cell in delimiter)
         ):
-            table_lines.update((index, index + 1))
+            delimiter_pipes = [
+                i for i, character in enumerate(lines[index + 1]) if character == "|"
+            ]
+            header_pipes = [i for i, character in enumerate(lines[index]) if character == "|"]
+            if len(header_pipes) == len(delimiter_pipes):
+                aligned_boundaries[index] = {
+                    row_pipe
+                    for row_pipe, delimiter_pipe in zip(header_pipes, delimiter_pipes, strict=True)
+                    if row_pipe == delimiter_pipe
+                }
             index += 2
             while index < len(lines):
                 row = _markdown_table_cells(lines[index])
                 if row is None or len(row) != len(header):
                     break
-                table_lines.add(index)
+                row_pipes = [i for i, character in enumerate(lines[index]) if character == "|"]
+                if len(row_pipes) == len(delimiter_pipes):
+                    aligned_boundaries[index] = {
+                        row_pipe
+                        for row_pipe, delimiter_pipe in zip(row_pipes, delimiter_pipes, strict=True)
+                        if row_pipe == delimiter_pipe
+                    }
                 index += 1
             continue
         index += 1
-    return table_lines
+    return aligned_boundaries
 
 
 def _detect_block_and_ratio(content: str) -> list[PaddingRun]:

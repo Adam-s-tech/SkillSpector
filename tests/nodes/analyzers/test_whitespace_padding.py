@@ -218,6 +218,36 @@ class TestHorizontalSignal:
         )
         assert detect_whitespace_padding(content, file_type="markdown") == []
 
+    def test_markdown_table_padding_aligned_with_wide_delimiter_cell_is_exempt(self):
+        spaces = 2_001
+        content = (
+            "| Notes | Other |\n"
+            + "|"
+            + "-" * (spaces + 6)
+            + "|---|\n"
+            + "| notes"
+            + " " * spaces
+            + "| other |\n"
+        )
+
+        runs = detect_whitespace_padding(content, file_type="markdown")
+
+        assert not any(run.kind == "horizontal" and run.start_line == 3 for run in runs)
+
+    def test_markdown_table_misaligned_long_padding_remains_detectable(self):
+        content = "| A | B |\n|---|---|\n| notes" + " " * 2_000 + "| hidden |\n"
+
+        runs = detect_whitespace_padding(content, file_type="markdown")
+
+        assert any(run.kind == "horizontal" and run.start_line == 3 for run in runs)
+
+    def test_markdown_table_padding_before_cell_text_remains_detectable(self):
+        content = "| A | B |\n|---|---|\n| note" + " " * HORIZONTAL_RUN_CHARS + "hidden | x |\n"
+
+        runs = detect_whitespace_padding(content, file_type="markdown")
+
+        assert any(run.kind == "horizontal" and run.start_line == 3 for run in runs)
+
     def test_markdown_table_unusual_padding_remains_detectable(self):
         content = (
             "| Field" + "\u3000" * HORIZONTAL_RUN_CHARS + "| Value |\n"
