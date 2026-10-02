@@ -381,6 +381,11 @@ def _coverage_below_threshold(result: dict[str, object], threshold: float | None
     return coverage < threshold
 
 
+def _omissions_fail_threshold(omitted_skills: int, threshold: float | None) -> bool:
+    """Known omitted skills leave coverage below any positive threshold."""
+    return bool(omitted_skills) and threshold is not None and threshold > 0
+
+
 def _recursive_json_payload(result: dict[str, object]) -> dict[str, object] | None:
     """Return parsed report_body when it is valid JSON object text."""
     raw_report_body = result.get("report_body")
@@ -676,8 +681,10 @@ def scan(
     discovery_console = (
         err_console if output is None and format is not FormatChoice.terminal else console
     )
+    recursive_omitted_skills = 0
     if recursive and resolved_path.is_dir():
         detection = detect_skills(resolved_path)
+        recursive_omitted_skills = detection.omitted_symlink_entries
         if not detection.complete:
             pre_scan_ledger_events = _multi_skill_limitation_events(detection)
             err_console.print(
@@ -798,7 +805,9 @@ def scan(
             raise typer.Exit(code=1)
         if fail_on_findings and effective_findings(result):
             raise typer.Exit(code=1)
-        if _coverage_below_threshold(result, min_coverage):
+        if _coverage_below_threshold(result, min_coverage) or _omissions_fail_threshold(
+            recursive_omitted_skills, min_coverage
+        ):
             raise typer.Exit(code=1)
         if (result.get("risk_score") or 0) > RISK_THRESHOLD:
             raise typer.Exit(code=1)
@@ -2929,7 +2938,7 @@ def _scan_multi_skill(
         aggregate_limitations.append(
             f"{unscanned_skill_count} recursive skill(s) unscanned after an aggregate limit"
         )
-    if skills_omitted_total and min_coverage is not None and min_coverage > 0:
+    if _omissions_fail_threshold(skills_omitted_total, min_coverage):
         coverage_failed = True
     aggregate_limitations = list(dict.fromkeys(aggregate_limitations))[:256]
     aggregate_completeness = _multi_skill_analysis_completeness(

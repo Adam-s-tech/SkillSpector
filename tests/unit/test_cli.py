@@ -445,7 +445,9 @@ def test_cli_min_coverage_rejects_invalid_values(tmp_path: Path, value: str) -> 
     result = runner.invoke(app, ["scan", str(tmp_path), "--min-coverage", value])
     assert result.exit_code == 2
     plain_output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.output)
-    assert "--min-coverage" in plain_output
+    assert "must be a finite number between 0 and 100" in " ".join(
+        re.sub(r"[│╭╮╰╯─]", " ", plain_output).split()
+    )
 
 
 def test_cli_mcp_registry_rejects_min_coverage(tmp_path: Path) -> None:
@@ -453,10 +455,43 @@ def test_cli_mcp_registry_rejects_min_coverage(tmp_path: Path) -> None:
     payload.write_text('{"servers": []}', encoding="utf-8")
     result = runner.invoke(
         app,
-        ["scan", str(payload), "--mcp-registry", "--min-coverage", "87"],
+        ["scan", str(payload), "--mcp-registry", "--format", "json", "--min-coverage", "87"],
     )
     assert result.exit_code == 2
+    assert "cannot be combined with" in result.output
     assert "--min-coverage" in result.output
+
+
+@pytest.mark.parametrize(("threshold", "exit_code"), [("90", 1), ("0", 0)])
+def test_recursive_min_coverage_fails_when_only_symlinked_skills_were_found(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, threshold: str, exit_code: int
+) -> None:
+    (tmp_path / "README.md").write_text("# Skills", encoding="utf-8")
+    output = tmp_path / "report.json"
+    monkeypatch.setattr(
+        cli_module,
+        "detect_skills",
+        lambda _path: MultiSkillDetectionResult(is_multi_skill=False, omitted_symlink_entries=1),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_scan_skill",
+        lambda **_kwargs: {
+            "report_body": "{}",
+            "execution_successful": True,
+            "analysis_completeness": {"is_complete": True, "coverage_percent": 100},
+            "risk_score": 0,
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        ["scan", str(tmp_path), "--recursive", "--no-llm", "-f", "json", "-o", str(output)]
+        + ["--min-coverage", threshold],
+    )
+
+    assert result.exit_code == exit_code
+    assert output.exists()
 
 
 def test_recursive_min_coverage_checks_each_child_and_writes_report(tmp_path: Path) -> None:
