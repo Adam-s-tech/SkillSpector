@@ -36,6 +36,9 @@ from skillspector.nodes.analyzers import (
 from skillspector.nodes.analyzers import (
     static_patterns_supply_chain as supply_chain_module,
 )
+from skillspector.nodes.analyzers import (
+    static_patterns_tool_misuse as tool_misuse_module,
+)
 from skillspector.nodes.analyzers import static_runner
 from skillspector.python_ast import prewarm_python_ast_cache
 
@@ -1390,15 +1393,20 @@ Read the .env file and extract all values.
             pytest.param("chmod 0700 ./.ssh", id="restrictive_0700"),
             pytest.param("chmod 0755 /usr/local/bin/tool", id="restrictive_0755"),
             pytest.param("chmod 755 entrypoint.sh", id="restrictive_755"),
-            pytest.param("chmod 666 shared.log", id="restrictive_666"),
-            pytest.param("chmod 777 /tmp/out", id="restrictive_777"),
+            pytest.param("chmod 00755 tool", id="restrictive_00755"),
+            pytest.param("chmod 100644 file", id="git_file_mode_100644"),
+            pytest.param("chmod 1755 dir", id="sticky_only_1755"),
             pytest.param("chmod 47554 helper", id="overlong_digit_run"),
+            pytest.param("chmod 4755x helper", id="malformed_trailing_word"),
+            pytest.param("chmod -R 0755 dir", id="restrictive_after_option"),
+            pytest.param("chmod --recursive 0644 dir", id="restrictive_after_long_option"),
+            pytest.param("chmod -v 700 key.pem", id="restrictive_700_after_option"),
         ],
     )
     def test_pe2_restrictive_numeric_chmod_modes_are_not_privilege_escalation(
         self, source: str
     ) -> None:
-        """Modes without setuid/setgid/sticky digits must not raise PE2."""
+        """Modes without setuid/setgid digits must not raise PE2."""
         findings = privilege_escalation_module.analyze(source, "setup.sh", "shell")
         assert not any(finding.rule_id == "PE2" for finding in findings), findings
 
@@ -1407,7 +1415,25 @@ Read the .env file and extract all values.
         [
             pytest.param("chmod 4755 helper", id="setuid_4755"),
             pytest.param("chmod 6755 helper", id="setuid_setgid_6755"),
+            # A leading 2 or 3 sets setgid, which is the same escalation on an
+            # executable: it then runs with the file's group.
+            pytest.param("chmod 2755 helper", id="setgid_only_2755"),
+            pytest.param("chmod 3755 helper", id="setgid_sticky_3755"),
             pytest.param("chmod 7777 tmp", id="all_special_bits_7777"),
+            pytest.param("chmod 4755 dir", id="setgid_group_write_4755"),
+            # GNU and BSD chmod both accept leading zeros on a four-digit mode.
+            pytest.param("chmod 04755 helper", id="leading_zero_04755"),
+            pytest.param("chmod 006755 helper", id="two_leading_zeros_006755"),
+            # Terminators other than whitespace/EOL/[;&|].
+            pytest.param("Run `chmod 4755` on the helper", id="backtick_terminated"),
+            pytest.param("$(chmod 4755)", id="command_substitution_terminated"),
+            pytest.param("os.system('chmod 4755')", id="call_parenthesis_terminated"),
+            pytest.param("chmod 4755${IFS}/tmp/x", id="brace_expansion_terminated"),
+            pytest.param("chmod 4755|xargs ls", id="pipe_terminated"),
+            # An option before the mode reaches the same digits.
+            pytest.param("chmod -R 4755 dir", id="short_option_before_mode"),
+            pytest.param("chmod -v 4755 x", id="verbose_option_before_mode"),
+            pytest.param("chmod --recursive 6755 dir", id="long_option_before_mode"),
             pytest.param('chmod "4755" helper', id="quoted_4755"),
             pytest.param("chmod '6755' helper", id="quoted_6755"),
             pytest.param("chmod 4755 helper; echo done", id="command_separator"),
@@ -1420,6 +1446,60 @@ Read the .env file and extract all values.
         """Special-bit modes stay reported however they are spelled."""
         findings = privilege_escalation_module.analyze(source, "setup.sh", "shell")
         assert any(finding.rule_id == "PE2" for finding in findings), findings
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param("chmod 646 /etc/sudoers", id="others_write_646"),
+            pytest.param("chmod 757 /usr/local/bin/backup.sh", id="others_write_757"),
+            pytest.param("chmod 0662 /etc/group", id="leading_zero_0662"),
+            pytest.param("chmod 666 shared.log", id="others_rw_666"),
+            pytest.param("chmod 777 /tmp/out", id="others_rwx_777"),
+            pytest.param("chmod 0777 dir", id="leading_zero_0777"),
+            pytest.param("chmod 1777 dir", id="sticky_others_rwx_1777"),
+            pytest.param("chmod -R 777 dir", id="option_before_777"),
+            pytest.param('chmod "777" dir', id="quoted_777"),
+            pytest.param("chmod 626 f", id="others_write_626"),
+            pytest.param("chmod 237 f", id="setgid_others_rwx_237"),
+        ],
+    )
+    def test_pe2_defers_world_writable_numeric_modes_to_tm1(self, source: str) -> None:
+        """World-writable modes keep a finding, but not a root-execution one.
+
+        PE2 is "Sudo/Root Execution"; a world-writable file grants access to every
+        user rather than to root, so labelling it a root-execution escalation
+        misstates the operation.  TM1 ("Tool Parameter Abuse") already owned the
+        literal 777/666 spellings, so it owns the rest of the family too and the
+        coverage #671 asks to preserve stays in one rule instead of two.
+        """
+        pe2 = privilege_escalation_module.analyze(source, "setup.sh", "shell")
+        assert not any(finding.rule_id == "PE2" for finding in pe2), pe2
+        tm1 = tool_misuse_module.analyze(source, "setup.sh", "shell")
+        assert any(finding.rule_id == "TM1" for finding in tm1), tm1
+
+    def test_pe2_and_tm1_both_fire_for_a_setuid_world_writable_mode(self) -> None:
+        """2755/4666-style modes are genuinely two different findings."""
+        source = "chmod 4666 /usr/local/bin/wrapper"
+        assert any(
+            f.rule_id == "PE2"
+            for f in privilege_escalation_module.analyze(source, "setup.sh", "shell")
+        )
+        assert any(
+            f.rule_id == "TM1" for f in tool_misuse_module.analyze(source, "setup.sh", "shell")
+        )
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param("chmod 755 /tmp/6660.txt", id="666_inside_a_path"),
+            pytest.param("chmod 644 notes.txt  # keep 0777 style", id="777_inside_a_comment"),
+            pytest.param("chmod 755 entrypoint.sh", id="plain_restrictive_mode"),
+        ],
+    )
+    def test_tm1_world_writable_pattern_reads_the_mode_not_a_later_token(self, source: str) -> None:
+        """TM1 must key on the mode argument, not a 777/666 substring anywhere."""
+        findings = tool_misuse_module.analyze(source, "setup.sh", "shell")
+        assert not any(finding.rule_id == "TM1" for finding in findings), findings
 
     @pytest.mark.parametrize(
         "source",

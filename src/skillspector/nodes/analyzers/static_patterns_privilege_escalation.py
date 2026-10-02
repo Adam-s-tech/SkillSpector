@@ -90,8 +90,18 @@ PE2_CODE_PATTERNS = [
     # digit, so the full four-digit form is what has to be present.  Accepting a
     # bare 4/5/6/7 anywhere in the mode flagged every ordinary permission whose
     # rwx triple happened to contain one (chmod 600, chmod 644, chmod 755, ...).
-    # The trailing boundary keeps a longer digit run from being read as a mode.
-    (r"chmod\s+[\"']?[4567][0-7]{3}[\"']?(?=\s|$|[;&|])", 0.8),
+    # Leading digit 2-7 selects setgid (2, 3, 6) or setuid (4, 5, 7).  A bare 1
+    # only adds sticky, which grants nobody new access, so it stays unreported.
+    # The pieces around the mode: 0* absorbs the leading zeros GNU and BSD chmod
+    # accept, the option group lets `chmod -R 4755 dir` reach the mode, the
+    # optional quotes cover `chmod "6755"`, and the trailing lookahead rejects a
+    # longer digit run (chmod 47554) as well as a malformed trailing word
+    # (chmod 4755x) while still matching every non-alphanumeric terminator
+    # (space, end of line, `;`, `&`, `|`, `)`, `$`, a quote or a backtick).
+    (
+        r"chmod\s+(?:--?[\w=-]*[ \t]+)*[\"']?0*[2-7][0-7]{3}[\"']?(?![0-9\w])",
+        0.8,
+    ),
 ]
 PE2_PROSE_PATTERNS = [
     (r"(?:run|execute)\s+(?:as|with)\s+root", 0.8),
