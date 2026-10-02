@@ -165,7 +165,7 @@ _PASSIVE_REMOVAL_SUFFIX_RE: Final = re.compile(
     re.IGNORECASE,
 )
 _UNSUPPORTED_QUOTED_DIRECTIVE_START_RE: Final = re.compile(
-    rf"(?<![-\w])\b(?:{_FALLBACK_REMOVAL_VERBS})\b[^.!?\n]{{0,{_MAX_FALLBACK_PREFIX_CHARS}}}?"
+    rf"\b(?:{_FALLBACK_REMOVAL_VERBS})\b[^.!?\n]{{0,{_MAX_FALLBACK_PREFIX_CHARS}}}?"
     rf"(?P<quote>[{_QUOTE_OPEN_CLASS}])",
     re.IGNORECASE,
 )
@@ -285,7 +285,7 @@ _INLINE_SHELL_WRAPPER_RE: Final = re.compile(
     re.IGNORECASE,
 )
 _DECODED_ACTIVE_TOKEN_RE: Final = re.compile(
-    r"\b(?:run|execute|invoke|issue|launch|perform|call|eval|type|submit|enter|"
+    r"\b(?:run|execute|invoke|issue|launch|perform|call|eval|type|submit|enter|curl|"
     r"rm|del|erase|sudo|bash|zsh|powershell)\b",
     re.IGNORECASE,
 )
@@ -721,11 +721,28 @@ def validated_json_string_closers(text: str, check_runtime: Callable[[], None] |
 
 
 def _is_quoted_mapping_key(text: str, start: int) -> bool:
-    """Return whether a directive-like word is inside a structural mapping key."""
+    """Return whether the exact quoted removal verb is followed by a key colon."""
     if start == 0 or text[start - 1] not in _ALL_QUOTE_CHARACTERS:
         return False
-    prefix = text[: start - 1].rstrip()
-    return bool(prefix) and prefix[-1] in "{[,"
+    closing_quote = _QUOTE_OPEN_TO_CLOSE[text[start - 1]]
+    closing = text.find(closing_quote, start)
+    if (
+        closing < 0
+        or re.fullmatch(_FALLBACK_REMOVAL_VERBS, text[start:closing], re.IGNORECASE) is None
+    ):
+        return False
+    cursor = closing + len(closing_quote)
+    while cursor < len(text) and text[cursor].isspace():
+        cursor += 1
+    return cursor < len(text) and text[cursor] == ":"
+
+
+def _verb_is_in_cli_flag_token(text: str, start: int) -> bool:
+    """Return whether a fallback verb is part of a hyphen-prefixed token."""
+    token_start = start
+    while token_start > 0 and (text[token_start - 1].isalnum() or text[token_start - 1] in "_-"):
+        token_start -= 1
+    return token_start < start and text[token_start] == "-"
 
 
 def _quoted_directives(
@@ -745,6 +762,8 @@ def _quoted_directives(
     for match in pattern.finditer(text):
         if check_runtime is not None:
             check_runtime()
+        if unsupported_header and _verb_is_in_cli_flag_token(text, match.start()):
+            continue
         if unsupported_header and _is_quoted_mapping_key(text, match.start()):
             continue
         if match.end() - 1 in json_value_closers:
@@ -902,6 +921,8 @@ def _tag_directives(
     for match in pattern.finditer(text):
         if check_runtime is not None:
             check_runtime()
+        if unsupported_header and _verb_is_in_cli_flag_token(text, match.start()):
+            continue
         marker_start = match.start("open")
         marker_end_limit = min(len(text), marker_start + MAX_MARKER_LOOKAHEAD_CHARS)
         marker_end = text.find(">", marker_start + 1, marker_end_limit)
@@ -931,6 +952,8 @@ def _encoded_directives(
     for match in pattern.finditer(text):
         if check_runtime is not None:
             check_runtime()
+        if unsupported_header and _verb_is_in_cli_flag_token(text, match.start()):
+            continue
         quote = match.group("quote")
         closing_pattern = (
             _ENCODED_SINGLE_QUOTE_RE
@@ -981,6 +1004,8 @@ def _encoded_tag_directives(
     for match in pattern.finditer(text):
         if check_runtime is not None:
             check_runtime()
+        if unsupported_header and _verb_is_in_cli_flag_token(text, match.start()):
+            continue
         marker_start = match.start("open")
         marker_end_limit = min(len(text), marker_start + MAX_MARKER_LOOKAHEAD_CHARS)
         marker_end = _ENCODED_TAG_END_RE.search(text, match.end(), marker_end_limit)
