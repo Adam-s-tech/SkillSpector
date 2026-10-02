@@ -132,7 +132,8 @@ Do NOT flag markdown if:
   catalog, a quick-reference table, or a list of available tools) and the text
   does not instruct the agent to perform that operation.  Naming a bulk or
   destructive tool does not select an action; only an instruction to use it
-  does.
+  does.  This covers the listing only: user data that the skill itself sends
+  to a third-party service still needs a warning.
 
 Use rule ID **SQP-2** for all missing-warning findings.
 
