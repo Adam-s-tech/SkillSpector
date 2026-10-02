@@ -580,7 +580,8 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
                     ),
                     remediation=(
                         "Clarify the skill's intended tool scope and review how the host "
-                        "runtime enforces it. For Claude Code / Agent Skills SKILL.md, "
+                        "runtime enforces it; runtime permissions are unknown unless "
+                        "separately verified. For Claude Code / Agent Skills SKILL.md, "
                         "'allowed-tools' records preapproved tools, not a permission ceiling; "
                         "add a tool only when it is independently approved as necessary, "
                         "not to silence this finding. For MCP server manifests, use a "
@@ -621,7 +622,8 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
                     confidence = _clamp(0.55 if capability in test_only_caps else 0.75)
                     remediation = (
                         f"Review whether the '{capability}' capability is required and "
-                        "whether the host runtime policy permits it. Remove code that "
+                        "whether the host runtime policy permits it; runtime permissions "
+                        "are unknown unless separately verified. Remove code that "
                         "does not need the capability; do not broaden 'allowed-tools' "
                         "preapproval solely to silence this finding."
                         if allowed_tools
@@ -631,12 +633,14 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
                     explanation = (
                         f"The skill uses '{capability}' capability that is not covered by "
                         "the declared 'allowed-tools' preapproval. Review the host runtime's "
-                        "actual enforcement policy; this declaration alone does not establish "
+                        "actual enforcement policy; runtime permissions are unknown unless "
+                        "separately verified, and this declaration alone does not establish "
                         "a permission ceiling."
                         if allowed_tools
                         else f"The skill uses '{capability}' capability that is not covered by "
                         "the declared MCP 'permissions' list. Review the server's actual "
-                        "authorization policy."
+                        "authorization policy; runtime permissions are unknown unless "
+                        "separately verified."
                     )
                     budget.emit(
                         Finding(

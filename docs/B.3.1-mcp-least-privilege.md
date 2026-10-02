@@ -122,7 +122,8 @@ code contains `httpx.post(...)`. LP1 fires for the undeclared `network`
 capability.
 
 **Remediation:** Review whether the capability is required and how the host
-runtime enforces it. Remove code that does not need the capability. For Agent
+runtime enforces it; runtime permissions are unknown unless separately
+verified. Remove code that does not need the capability. For Agent
 Skills `SKILL.md`, `allowed-tools` records tools preapproved for invocation; it
 is not a permission ceiling. Add a tool only when it is independently approved
 as necessary, not to silence this finding. For MCP server manifests, add the
@@ -180,7 +181,8 @@ rather than deception) but still a significant transparency gap.
 `subprocess.run(...)`.
 
 **Remediation:** Clarify the skill's intended tool scope and review how the host
-runtime enforces it. For Claude Code / Agent Skills `SKILL.md`, `allowed-tools`
+runtime enforces it; runtime permissions are unknown unless separately
+verified. For Claude Code / Agent Skills `SKILL.md`, `allowed-tools`
 records tools preapproved for invocation, not a permission ceiling; add tools
 only when independently approved as necessary, not to silence this finding
 (`permissions` is not part of the `SKILL.md` schema and is ignored). For MCP

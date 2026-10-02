@@ -271,6 +271,7 @@ class TestLP3NoPermissions:
             assert remediation is not None
             assert "independently approved as necessary" in remediation
             assert "not to silence this finding" in remediation
+            assert "runtime permissions are unknown unless separately verified" in remediation
 
 
 class TestLP3AllowedTools:
@@ -339,9 +340,11 @@ class TestLP3AllowedTools:
             assert "Add a tool" not in lp1.remediation
             assert "preapproval" in lp1.remediation
             assert "do not broaden" in lp1.remediation.lower()
+            assert "runtime permissions are unknown unless separately verified" in lp1.remediation
             fallback = get_remediation("LP1")
             assert "do not broaden" in fallback.lower()
             assert "solely to silence" in fallback
+            assert "runtime permissions are unknown unless separately verified" in fallback
 
     def test_allowed_tools_fully_covered_no_lp1(self):
         """allowed-tools: [Bash] + only shell code → no LP1 (capability is covered)."""
