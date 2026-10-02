@@ -296,13 +296,12 @@ def _passthrough_with_defaults(findings: list[Finding]) -> list[Finding]:
 def _review_evidence(
     finding: Finding, outcome: str, item: dict[str, Any] | None = None
 ) -> dict[str, object]:
-    """Preserve original evidence while recording the per-finding review outcome."""
+    """Preserve original evidence while recording review metadata only."""
     evidence = {**finding.evidence, "llm_review_outcome": outcome}
     if item is not None:
-        for field in ("confidence", "explanation", "remediation"):
-            value = item.get(field)
-            if value not in (None, ""):
-                evidence[f"llm_review_{field}"] = value
+        confidence = item.get("confidence")
+        if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+            evidence["llm_review_confidence"] = confidence
     return evidence
 
 
@@ -310,6 +309,49 @@ def _review_outcome(item: dict[str, Any]) -> str:
     if not item.get("is_vulnerability", False):
         return "disagreed"
     return "low-confidence" if float(item.get("confidence", 0.7)) < 0.6 else "confirmed"
+
+
+_REVIEW_OUTCOME_PRIORITY = {"disagreed": 0, "low-confidence": 1, "confirmed": 2}
+
+
+def _prefer_assessment(
+    current: dict[str, Any] | None,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the stronger assessment, preserving first input order on ties."""
+    if current is None:
+        return candidate
+    current_priority = _REVIEW_OUTCOME_PRIORITY.get(_review_outcome(current), -1)
+    candidate_priority = _REVIEW_OUTCOME_PRIORITY.get(_review_outcome(candidate), -1)
+    return candidate if candidate_priority > current_priority else current
+
+
+def _assessment_matches_finding(
+    item: dict[str, Any],
+    finding: Finding,
+    batch_file_path: str,
+) -> bool:
+    """Return whether an id-bearing assessment actually describes *finding*."""
+    pattern_id = item.get("pattern_id")
+    if not isinstance(pattern_id, str) or pattern_id != finding.rule_id:
+        return False
+    if str(item.get("_file", batch_file_path)) != finding.file:
+        return False
+    start_line = item.get("start_line")
+    if start_line is not None:
+        try:
+            if int(start_line) != finding.start_line:
+                return False
+        except (TypeError, ValueError):
+            return False
+    end_line = item.get("end_line")
+    if end_line is not None and finding.end_line is not None:
+        try:
+            if int(end_line) != finding.end_line:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
 
 
 def _mark_unconfirmed(
@@ -329,9 +371,16 @@ def _mark_unconfirmed(
 
 
 def _mark_review_failed(finding: Finding) -> Finding:
+    """Record a failed review without conflating the outage with disagreement."""
     if finding.rule_id in _AUTHORITATIVE_DETERMINISTIC_RULES:
         return finding
-    return _mark_unconfirmed(finding, "failed")
+    return replace(
+        finding,
+        remediation=finding.remediation or get_remediation(finding.rule_id),
+        code_snippet=finding.code_snippet or finding.context,
+        evidence=_review_evidence(finding, "failed"),
+        occurrences=list(finding.occurrences),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -413,12 +462,12 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
     ) -> list[Finding]:
         """Enrich deterministic findings without letting LLM output suppress them.
 
-        Uses granular ``(file, rule_id, start_line, end_line)`` keying when the
-        LLM provides a ``start_line``, so multiple findings with the same
-        rule_id in one file are independently confirmed or rejected.  ``end_line``
-        is included in the key when provided but falls back to ``None`` so
-        callers that omit it still match.  Falls back to coarse
-        ``(file, rule_id)`` keying for LLM responses that omit ``start_line``.
+        Exact ``finding_id`` values are validated against the submitted batch
+        and the item's rule/file/start location.  Every item is also indexed by
+        granular ``(file, rule_id, start_line, end_line)`` when ``start_line`` is
+        present, falling back to ``(file, rule_id, start_line)`` or coarse
+        ``(file, rule_id)`` when needed.  Duplicate assessments are merged
+        deterministically with confirmed > low-confidence > disagreed.
 
         Every deterministic finding remains in primary output. Unconfirmed
         findings receive an annotation tag; confirmed findings may gain an
@@ -435,30 +484,59 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
             exact_counts[key] = exact_counts.get(key, 0) + 1
 
         for batch, llm_items in batch_results:
+            batch_findings_by_id = {
+                finding.finding_id: finding
+                for finding in batch.findings
+                if isinstance(finding.finding_id, str) and finding.finding_id
+            }
             for item in llm_items:
-                finding_id = item.get("finding_id")
-                if finding_id:
-                    assessments_by_id[str(finding_id)] = item
-                    continue
+                file_path = str(item.get("_file", batch.file_path))
                 pattern_id = item.get("pattern_id")
-                if not pattern_id:
-                    continue
-                pattern_id = str(pattern_id)
-                file_path = item.get("_file", batch.file_path)
+                pattern_id = str(pattern_id) if pattern_id else ""
                 start_line = item.get("start_line")
-                if start_line is not None:
-                    end_line = item.get("end_line")
-                    confirmed_granular[
-                        (
-                            file_path,
-                            pattern_id,
-                            int(start_line),
-                            int(end_line) if end_line is not None else None,
+                end_line = item.get("end_line")
+
+                # Index every item by location too, so a bad or absent id can
+                # still bind when the rule and location are unambiguous.
+                if pattern_id:
+                    if start_line is not None:
+                        try:
+                            start_line_int = int(start_line)
+                            end_line_int = int(end_line) if end_line is not None else None
+                        except (TypeError, ValueError):
+                            start_line_int = None
+                            end_line_int = None
+                        if start_line_int is not None:
+                            granular_key = (
+                                file_path,
+                                pattern_id,
+                                start_line_int,
+                                end_line_int,
+                            )
+                            confirmed_granular[granular_key] = _prefer_assessment(
+                                confirmed_granular.get(granular_key), item
+                            )
+                            start_key = (file_path, pattern_id, start_line_int)
+                            confirmed_by_start[start_key] = _prefer_assessment(
+                                confirmed_by_start.get(start_key), item
+                            )
+                    else:
+                        coarse_key = (file_path, pattern_id)
+                        confirmed_coarse[coarse_key] = _prefer_assessment(
+                            confirmed_coarse.get(coarse_key), item
                         )
-                    ] = item
-                    confirmed_by_start[(file_path, pattern_id, int(start_line))] = item
-                else:
-                    confirmed_coarse[(file_path, pattern_id)] = item
+
+                finding_id = item.get("finding_id")
+                if not isinstance(finding_id, str) or not finding_id:
+                    continue
+                batch_finding = batch_findings_by_id.get(finding_id)
+                if batch_finding is None or not _assessment_matches_finding(
+                    item, batch_finding, batch.file_path
+                ):
+                    continue
+                assessments_by_id[finding_id] = _prefer_assessment(
+                    assessments_by_id.get(finding_id), item
+                )
 
         result: list[Finding] = []
         for f in findings:
@@ -490,12 +568,11 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
             if outcome != "confirmed":
                 result.append(_mark_unconfirmed(f, outcome, assessment))
                 continue
-            pattern_id = str(assessment.get("pattern_id") or f.rule_id)
             explanation = (assessment.get("explanation") or "").strip() or get_explanation(
-                pattern_id
+                f.rule_id
             )
             remediation = (assessment.get("remediation") or "").strip() or get_remediation(
-                pattern_id
+                f.rule_id
             )
             confidence = float(assessment.get("confidence", 0.7))
             result.append(
@@ -657,8 +734,10 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
     When ``use_llm`` is *True* and an LLM API key is configured (see
     ``llm_utils._resolve_llm_credentials``), each file that has at least one
     finding gets its own LLM call (or multiple calls if the file is too
-    large for the model's input budget).  Findings are matched back by
-    ``(file, rule_id)`` so enrichment is precise.
+    large for the model's input budget).  Findings are matched back by exact
+    ``finding_id`` when that id validates against the submitted batch, with
+    unambiguous ``(file, rule_id, start_line, end_line)`` location matching as
+    the fallback so enrichment stays precise.
 
     Falls back to default remediations when ``use_llm`` is *False* or when
     an LLM call fails.
