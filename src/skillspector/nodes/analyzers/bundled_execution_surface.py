@@ -1742,6 +1742,7 @@ def _plugin_hook_documents(
             or posixpath.isabs(candidate)
             or "\\" in candidate
             or (len(candidate) > 1 and candidate[1] == ":")
+            or (len(resolved) > 1 and resolved[1] == ":")
         ):
             incomplete(_PLUGIN_MANIFEST_PATH, LedgerReason.REFERENCED_UNINSPECTED)
             continue
