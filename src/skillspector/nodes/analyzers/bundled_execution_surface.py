@@ -1734,6 +1734,11 @@ def _plugin_hook_documents(
         if not isinstance(candidate, str):
             incomplete(_PLUGIN_MANIFEST_PATH, LedgerReason.OPAQUE_CONTENT)
             continue
+        try:
+            candidate.encode("utf-8")
+        except UnicodeEncodeError:
+            incomplete(_PLUGIN_MANIFEST_PATH, LedgerReason.REFERENCED_UNINSPECTED)
+            continue
         resolved = posixpath.normpath(candidate)
         if (
             not resolved

@@ -1958,8 +1958,11 @@ def test_plugin_manifest_unsafe_hook_paths_are_skipped(hooks_value: object) -> N
     )
 
 
-@pytest.mark.parametrize("target", ["./C:hooks.json", "./a:", "x/../C:/h.json"])
-def test_plugin_normalized_drive_paths_preserve_existing_findings(target: str) -> None:
+@pytest.mark.parametrize(
+    "target",
+    ["./C:hooks.json", "./a:", "x/../C:/h.json", "hooks/\ud800.json", "hooks/\udfff.json"],
+)
+def test_plugin_invalid_paths_preserve_existing_findings(target: str) -> None:
     result = _run(
         {
             ".claude-plugin/plugin.json": {"hooks": [target]},
