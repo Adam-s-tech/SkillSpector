@@ -2301,9 +2301,10 @@ def _analyze_dependencies_detailed(
                         "vulnerable or safe."
                     ),
                     remediation=(
-                        "Restore connectivity to api.osv.dev or adjust "
-                        "SKILLSPECTOR_OSV_TIMEOUT and retry the scan. Verify dependency versions "
-                        "against current advisories before relying on the incomplete results."
+                        "Retry the scan and verify dependency versions against current "
+                        "advisories before relying on the incomplete results. If the lookup "
+                        "timed out or the network was unavailable, check connectivity to "
+                        "api.osv.dev or adjust SKILLSPECTOR_OSV_TIMEOUT before retrying."
                     ),
                 )
             ]

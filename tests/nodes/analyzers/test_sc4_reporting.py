@@ -16,18 +16,26 @@
 """SC4 report guidance must match the evidence, including incomplete lookups."""
 
 import json
+from dataclasses import replace
 
 import pytest
 
 from skillspector.inspection_ledger import LedgerOutcome, LedgerReason
-from skillspector.models import Severity
+from skillspector.llm_analyzer_base import Batch
+from skillspector.models import Finding, Severity
 from skillspector.nodes.analyzers import static_patterns_supply_chain as sc
 from skillspector.nodes.analyzers.osv_client import (
     OsvQueryLimitation,
     QueryBatchResults,
     VulnResult,
 )
+from skillspector.nodes.analyzers.pattern_defaults import get_explanation, get_remediation
 from skillspector.nodes.analyzers.static_runner import analyzer_finding_to_finding
+from skillspector.nodes.meta_analyzer import (
+    LLMMetaAnalyzer,
+    MetaAnalyzerFinding,
+    MetaAnalyzerResult,
+)
 from skillspector.nodes.report import report
 
 
@@ -184,3 +192,181 @@ def test_successful_empty_lookup_does_not_add_a_vulnerability(monkeypatch, conte
     assert _sc4(raw) == []
     assert limitations == []
     assert count == 1
+
+
+def _confirmed_sc4(findings, *, text=None, coarse=False):
+    # Exercise the real schema/parse/filter path, without constructing a provider.
+    analyzer = LLMMetaAnalyzer.__new__(LLMMetaAnalyzer)
+    batch = Batch(file_path="requirements.txt", content="", findings=findings)
+    fields = {} if text is None else {"explanation": text, "remediation": text}
+    response = MetaAnalyzerResult(
+        findings=[
+            MetaAnalyzerFinding(
+                pattern_id="SC4",
+                start_line=None if coarse else finding.start_line,
+                end_line=None if coarse else finding.end_line,
+                is_vulnerability=True,
+                confidence=0.7,
+                intent="negligent",
+                impact="low",
+                **fields,
+            )
+            for finding in findings
+        ]
+    )
+    return analyzer.apply_filter(findings, [(batch, analyzer.parse_response(response, batch))])
+
+
+@pytest.mark.parametrize("output_format", ["json", "markdown", "sarif"])
+@pytest.mark.parametrize("text", [None, "", " \t\n"])
+@pytest.mark.parametrize("evidence", ["resolved", "unknown", "fallback", "threshold", "failed"])
+def test_confirmed_empty_llm_text_preserves_sc4_evidence_in_reports(
+    monkeypatch, advisory, failed_lookup, output_format, text, evidence
+):
+    if evidence == "failed":
+        raw, _, _ = sc._analyze_dependencies_detailed("examplepkg==1.0.0\n", "requirements.txt")
+    elif evidence in {"resolved", "unknown"}:
+        monkeypatch.setattr(sc, "query_batch", lambda *_args, **_kwargs: [[advisory]])
+        version = "1.0.0" if evidence == "resolved" else None
+        raw, _ = sc._sc4_from_osv(
+            [("examplepkg", version, 3)], "PyPI", "requirements.txt", ["supply-chain"]
+        )
+    else:
+        threshold = "2.0.0" if evidence == "threshold" else None
+        raw = sc._sc4_from_fallback(
+            [("examplepkg", "1.0.0", 5)],
+            [("examplepkg", threshold, "Synthetic advisory", 0.8)],
+            "requirements.txt",
+            ["supply-chain"],
+        )
+    [original] = _sc4(raw)
+    [confirmed] = _confirmed_sc4([original], text=text)
+
+    assert confirmed.explanation == original.explanation
+    assert confirmed.remediation == original.remediation
+    assert confirmed.severity == original.severity
+    assert confirmed.confidence == max(original.confidence, 0.7)
+    assert confirmed.finding_id == original.finding_id
+    assert confirmed.evidence == original.evidence
+    assert confirmed.occurrences == original.occurrences
+    assert confirmed.tags == original.tags
+    assert original.message == raw[0].message
+    _assert_report_guidance(confirmed, output_format)
+
+
+@pytest.mark.parametrize("text", [None, "", " \t\n"])
+@pytest.mark.parametrize("original_text", [None, "", " \t\n"])
+def test_confirmed_sc4_without_evidence_text_uses_neutral_defaults(text, original_text):
+    original = Finding(
+        rule_id="SC4",
+        message="Dependency lookup requires review",
+        confidence=0.8,
+        file="requirements.txt",
+        explanation=original_text,
+        remediation=original_text,
+    )
+    [confirmed] = _confirmed_sc4([original], text=text)
+    assert confirmed.explanation == get_explanation("SC4")
+    assert confirmed.remediation == get_remediation("SC4")
+    assert "does not by itself confirm" in confirmed.explanation.lower()
+    assert "if the resolved release is affected" in confirmed.remediation.lower()
+    assert "verified fixed release when available" in confirmed.remediation.lower()
+    assert confirmed.confidence == original.confidence
+
+
+def test_coarse_sc4_confirmation_retains_each_findings_own_guidance():
+    first = Finding(
+        rule_id="SC4",
+        message="unknown version",
+        file="requirements.txt",
+        start_line=3,
+        explanation="Resolved version is unknown.",
+        remediation="Resolve the version first.",
+    )
+    second = replace(
+        first,
+        start_line=7,
+        message="lookup failed",
+        explanation="Coverage is incomplete.",
+        remediation="Retry the lookup.",
+    )
+    confirmed = _confirmed_sc4([first, second], coarse=True)
+    assert [f.explanation for f in confirmed] == [first.explanation, second.explanation]
+    assert [f.remediation for f in confirmed] == [first.remediation, second.remediation]
+
+
+@pytest.mark.parametrize(
+    ("explanation", "remediation"),
+    [
+        ("Reviewed advisory details", ""),
+        ("", "Review the fixed release"),
+        ("Reviewed advisory details", "Review the fixed release"),
+    ],
+)
+def test_explicit_llm_guidance_still_enriches_sc4(explanation, remediation):
+    original = Finding(
+        rule_id="SC4",
+        message="Original message",
+        file="requirements.txt",
+        explanation="Original evidence",
+        remediation="Original guidance",
+    )
+    batch = Batch(file_path=original.file, content="", findings=[original])
+    item = {
+        "pattern_id": "SC4",
+        "is_vulnerability": True,
+        "confidence": 0.8,
+        "explanation": explanation,
+        "remediation": remediation,
+    }
+    [confirmed] = LLMMetaAnalyzer.__new__(LLMMetaAnalyzer).apply_filter(
+        [original], [(batch, [item])]
+    )
+    assert confirmed.explanation == (explanation or original.explanation)
+    assert confirmed.remediation == (remediation or original.remediation)
+
+
+def test_other_rules_keep_their_existing_empty_llm_text_defaults():
+    original = Finding(
+        rule_id="SC1",
+        message="Original message",
+        file="requirements.txt",
+        explanation="Original evidence",
+        remediation="Original guidance",
+    )
+    batch = Batch(file_path=original.file, content="", findings=[original])
+    item = {"pattern_id": "SC1", "is_vulnerability": True, "confidence": 0.8}
+    [confirmed] = LLMMetaAnalyzer.__new__(LLMMetaAnalyzer).apply_filter(
+        [original], [(batch, [item])]
+    )
+    assert confirmed.explanation == get_explanation("SC1")
+    assert confirmed.remediation == get_remediation("SC1")
+
+
+@pytest.mark.parametrize(
+    "limitation",
+    [
+        OsvQueryLimitation(reason=LedgerReason.RUNTIME_LIMIT),
+        OsvQueryLimitation(reason=LedgerReason.ANALYZER_RUNTIME_ERROR, error_class="ValueError"),
+        OsvQueryLimitation(reason=LedgerReason.OUTPUT_LIMIT, observed_records=1, limit_records=0),
+    ],
+    ids=["timeout", "malformed-response", "query-limit"],
+)
+def test_failed_lookup_advice_does_not_assume_network_failure(monkeypatch, limitation):
+    monkeypatch.setattr(
+        sc,
+        "query_batch",
+        lambda packages, *_args, **_kwargs: QueryBatchResults(
+            [[] for _ in packages], limitations=(limitation,)
+        ),
+    )
+    monkeypatch.setattr(sc, "was_osv_reachable", lambda: False)
+    raw, limitations, _ = sc._analyze_dependencies_detailed(
+        "examplepkg==1.0.0\n", "requirements.txt"
+    )
+    [finding] = _sc4(raw)
+    assert limitations == [limitation]
+    assert "retry the scan" in finding.remediation.lower()
+    assert "if the lookup timed out or the network was unavailable" in finding.remediation.lower()
+    assert "verify dependency versions" in finding.remediation.lower()
+    assert "incomplete" in finding.explanation.lower()
