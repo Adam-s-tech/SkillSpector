@@ -162,7 +162,7 @@ _SC2_COMPOUND_TOKEN = re.compile(
     r"|(?P<escaped>\\[\s\S])"
     r"|(?P<comment>(?<![^\s;&|()<>])\#[^\r\n]*)"
     r"|(?P<heredoc><{2})"
-    r"|(?P<word>(?<![^\s;|&(){}])(?:if|fi|for|while|until|select|done|case|esac)"
+    r"|(?P<word>(?<![^\s;|&(){}])(?:if|fi|for|while|until|select|done|case|esac|begin|end|function)"
     r"(?=[\s;|&(){}]|\Z))"
     r"|(?P<delimiter>[(){}])|(?P<unclosed_quote>['\"`])",
 )
@@ -1716,6 +1716,8 @@ def _sc2_has_unproved_compound_context(
         "until": "done",
         "select": "done",
         "case": "esac",
+        "begin": "end",
+        "function": "end",
         "(": ")",
         "{": "}",
     }
@@ -1738,7 +1740,7 @@ def _sc2_has_unproved_compound_context(
             stack.append(endings[value])
         elif stack and value == stack[-1]:
             stack.pop()
-        elif value in {"fi", "done", "esac", "}"}:
+        elif value in {"fi", "done", "esac", "end", "}"}:
             return True
         # A case arm's ')' is not a parenthesis-group close.
         elif value == ")" and ")" in stack:
