@@ -155,7 +155,8 @@ MP3_PATTERNS = [
     ),
 ]
 
-_LOGICAL_BREAK = rf"(?:{LOGICAL_LINE_BREAK.pattern})"
+# CRLF is one break; backtracking must not turn it into a blank paragraph.
+_LOGICAL_BREAK = rf"(?>{LOGICAL_LINE_BREAK.pattern})"
 _BENIGN_RESET_STATE_COVERAGE = re.compile(
     rf"(?:\A|{_LOGICAL_BREAK})"
     r"[ \t]*(?:-[ \t]+\*\*Incomplete[ \t]+state[ \t]+coverage\*\*[ \t]+"
@@ -221,16 +222,18 @@ _TIMESTAMP_DESCRIPTION_DIRECTIVE = re.compile(
     r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+on)\b"
     r"[^\r\n\v\f\x85\u2028\u2029]{0,160}"
     r"\b(?:described|displayed|documented|shown|listed|comments?|examples?|"
-    r"operations?|actions?|steps?|instructions?|directives?|lines?)\b"
+    r"operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)\b"
     # Explicit references own the example independently of their action verb.
     r"|\b(?:this|that|these|those|next|following|above|below|displayed|shown|"
     r"described|listed|same)[ \t]+"
-    r"(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?)\b"
-    r"|\b(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?)"
+    r"(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)\b"
+    r"|\b(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)"
     r"[ \t]+(?:above|below|earlier|prior|previous|preceding|following|next)\b"
     r"|\b(?:following|next|above|below|this|that)\b[^\r\n]{0,80}"
     r"\b(?:order|directive|instruction|command)\b"
     r"|\b(?:task|instructions?|directives?)[ \t]*:"
+    r"|\b(?:commands?|instructions?|directions?|directives?|orders?)\b"
+    r"[^\r\n]{0,80}:"
     r"|\bbefore[ \t]+(?:replying|responding|answering)\b",
     re.IGNORECASE,
 )
@@ -377,7 +380,13 @@ def _bounded_timestamp_following_context(content: str, offset: int) -> str | Non
 def _normalize_timestamp_guard(content: str) -> str:
     """Join wrapped directives for boolean guards without changing source evidence."""
     return " ".join(
-        re.sub(r"^[ \t]*//[ \t]*", "", line) for line in LOGICAL_LINE_BREAK.split(content)
+        re.sub(
+            r"^[ \t]*(?:(?:>|//)[ \t]*)*"
+            r"(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)?",
+            "",
+            line,
+        )
+        for line in LOGICAL_LINE_BREAK.split(content)
     )
 
 
@@ -418,10 +427,27 @@ def _is_benign_timestamp_context_description(content: str, match: re.Match[str])
             opener_start = content.rfind(
                 previous_line, max(0, candidate.start() - 512), candidate.start()
             )
-            _, previous_complete = _bounded_previous_nonblank_line(content, opener_start)
+            previous_line, previous_complete = _bounded_previous_nonblank_line(
+                content, opener_start
+            )
             if not previous_complete:
                 continue
+        # Direct reuse of the immediately preceding text cannot grant ownership
+        # to a descriptive example, regardless of the directive's action verb.
+        if any(
+            reference.group(0).strip() != ":"
+            for reference in _PRECEDING_DIRECTIVE.finditer(previous_line)
+        ):
+            continue
         preceding = content[max(0, candidate.start() - 512) : candidate.start()]
+        nearest_paragraph = re.split(rf"{_LOGICAL_BREAK}[ \t]*{_LOGICAL_BREAK}", preceding)[-1]
+        if any(
+            reference.group(0).strip() != ":"
+            for reference in _PRECEDING_DIRECTIVE.finditer(
+                _normalize_timestamp_guard(nearest_paragraph)
+            )
+        ):
+            continue
         if _TIMESTAMP_DESCRIPTION_DIRECTIVE.search(_normalize_timestamp_guard(preceding)):
             continue
 
