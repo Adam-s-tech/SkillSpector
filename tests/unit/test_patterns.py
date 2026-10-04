@@ -1420,7 +1420,7 @@ Read the .env file and extract all values.
             pytest.param("chmod 2755 helper", id="setgid_only_2755"),
             pytest.param("chmod 3755 helper", id="setgid_sticky_3755"),
             pytest.param("chmod 7777 tmp", id="all_special_bits_7777"),
-            pytest.param("chmod 4755 dir", id="setgid_group_write_4755"),
+            pytest.param("chmod 2775 dir", id="setgid_group_write_2775"),
             # GNU and BSD chmod both accept leading zeros on a four-digit mode.
             pytest.param("chmod 04755 helper", id="leading_zero_04755"),
             pytest.param("chmod 006755 helper", id="two_leading_zeros_006755"),
@@ -1440,6 +1440,11 @@ Read the .env file and extract all values.
             pytest.param("chmod u+s helper", id="symbolic_u_plus_s"),
             pytest.param("chmod g+s helper", id="symbolic_g_plus_s"),
             pytest.param("chmod +s helper", id="symbolic_bare_plus_s"),
+            # GNU chmod accepts an operator in front of the octal digits, so
+            # `+4000` is as much a setuid mode as `4000`.
+            pytest.param("chmod +4000 helper", id="operator_plus_setuid_4000"),
+            pytest.param("chmod =4755 helper", id="operator_equals_setuid_4755"),
+            pytest.param("chmod -R +2755 dir", id="operator_plus_setgid_2755"),
         ],
     )
     def test_pe2_keeps_special_bit_chmod_modes(self, source: str) -> None:
@@ -1461,6 +1466,14 @@ Read the .env file and extract all values.
             pytest.param('chmod "777" dir', id="quoted_777"),
             pytest.param("chmod 626 f", id="others_write_626"),
             pytest.param("chmod 237 f", id="setgid_others_rwx_237"),
+            # GNU chmod (the default on most Linux images) accepts an operator in
+            # front of the octal digits; coreutils documents `chmod -6000` and
+            # `chmod =755`.  BSD/macOS rejects those, so they stay reported.
+            pytest.param("chmod +777 /var/www", id="operator_plus_777"),
+            pytest.param("chmod -R +777 /var/www", id="operator_plus_777_after_option"),
+            pytest.param("chmod =666 /etc/shadow", id="operator_equals_666"),
+            pytest.param("chmod +0777 dir", id="operator_plus_leading_zero_0777"),
+            pytest.param("chmod --recursive =777 dir", id="operator_equals_777_after_long_option"),
         ],
     )
     def test_pe2_defers_world_writable_numeric_modes_to_tm1(self, source: str) -> None:
@@ -1478,7 +1491,11 @@ Read the .env file and extract all values.
         assert any(finding.rule_id == "TM1" for finding in tm1), tm1
 
     def test_pe2_and_tm1_both_fire_for_a_setuid_world_writable_mode(self) -> None:
-        """2755/4666-style modes are genuinely two different findings."""
+        """4666-style modes are genuinely two different findings.
+
+        4666 is setuid (PE2) and world-writable (TM1).  A 2755, by contrast, is
+        setgid but its others-triple is 5, so TM1 must not claim it.
+        """
         source = "chmod 4666 /usr/local/bin/wrapper"
         assert any(
             f.rule_id == "PE2"
@@ -1494,11 +1511,34 @@ Read the .env file and extract all values.
             pytest.param("chmod 755 /tmp/6660.txt", id="666_inside_a_path"),
             pytest.param("chmod 644 notes.txt  # keep 0777 style", id="777_inside_a_comment"),
             pytest.param("chmod 755 entrypoint.sh", id="plain_restrictive_mode"),
+            pytest.param("chmod -6000 /etc/passwd", id="minus_operator_is_not_a_mode"),
+            pytest.param("chmod +0755 tool", id="plus_operator_restrictive_0755"),
         ],
     )
     def test_tm1_world_writable_pattern_reads_the_mode_not_a_later_token(self, source: str) -> None:
         """TM1 must key on the mode argument, not a 777/666 substring anywhere."""
         findings = tool_misuse_module.analyze(source, "setup.sh", "shell")
+        assert not any(finding.rule_id == "TM1" for finding in findings), findings
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # `chown` takes an owner, not a mode, so an owner ID whose last digit
+            # is 2/3/6/7 is not a world-writable chmod mode.  472 and 1337 are
+            # real published container UIDs (Grafana, Istio's proxy); the rest
+            # cover the shapes an arbitrary UID can take.
+            pytest.param("chown -R 472:472 /var/lib/grafana", id="grafana_uid_472"),
+            pytest.param("chown 1337:1337 /etc/istio/proxy", id="istio_proxy_uid_1337"),
+            pytest.param("chown -R 1002:1002 /data", id="app_uid_1002"),
+            pytest.param("chown 102:102 /var/log/app", id="low_uid_102"),
+            pytest.param("chown 0777:0777 /x", id="octal_looking_owner_0777"),
+            pytest.param("chown -R 2000:2000 /opt", id="uid_2000"),
+            pytest.param("chown 65534:65534 /tmp", id="nobody_uid_65534"),
+        ],
+    )
+    def test_tm1_numeric_chown_owner_id_is_not_a_world_writable_mode(self, source: str) -> None:
+        """A numeric chown owner must not be read as a chmod mode."""
+        findings = tool_misuse_module.analyze(source, "Dockerfile", "dockerfile")
         assert not any(finding.rule_id == "TM1" for finding in findings), findings
 
     @pytest.mark.parametrize(

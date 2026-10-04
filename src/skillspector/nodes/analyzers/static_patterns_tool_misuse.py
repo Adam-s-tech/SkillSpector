@@ -212,14 +212,23 @@ TM1_CODE_PATTERNS = [
         0.85,
     ),
     (r"\bshutil\.rmtree\s*\(\s*['\"]\s*/", 0.85),
-    # A numeric chmod/chown mode is world-writable when the others-triple
-    # carries the write bit, i.e. its last digit is 2, 3, 6 or 7.  Matching the
-    # mode argument itself rather than a bare `777`/`666` substring also keeps a
-    # path or a trailing comment from being read as the mode (chmod 755 /tmp/6660
-    # is a chmod 755).  This owns the numeric forms that TM1 already owned for
+    # A numeric chmod mode is world-writable when the others-triple carries the
+    # write bit, i.e. its last digit is 2, 3, 6 or 7.  Matching the mode argument
+    # itself rather than a bare `777`/`666` substring also keeps a path or a
+    # trailing comment from being read as the mode (chmod 755 /tmp/6660 is a
+    # chmod 755).  This owns the numeric forms that TM1 already owned for
     # 777/666, plus the 646/757/0662 spellings the privilege-escalation rule used
     # to catch as a side effect of matching 4/5/6/7 anywhere in the mode.
-    (r"(?:chmod|chown)\s+(?:--?[\w=-]*[ \t]+)*[\"']?0*[0-7]{2,3}[2367](?![0-9\w])[\"']?", 0.8),
+    # Only `chmod` is matched here: `chown` takes an owner rather than a mode, so
+    # a numeric owner ID whose last digit is 2/3/6/7 (Grafana's 472:472, Istio's
+    # 1337:1337) is not a world-writable mode.  The optional [+=] accepts the
+    # operator GNU chmod allows in front of the digits (chmod +777, chmod =666);
+    # BSD chmod rejects those, so they are reported rather than assumed safe.
+    # The option group takes a single leading dash for the reason given in the
+    # privilege-escalation rule: `--?` made the match exponential on a line of
+    # unmatched `-- ` tokens, and `[\w=-]*` already absorbs a long option's
+    # second dash.
+    (r"chmod\s+(?:-[\w=-]*[ \t]+)*[\"']?[+=]?0*[0-7]{2,3}[2367](?![0-9\w])[\"']?", 0.8),
     (r"(?:chmod|chown)\s+[^|]*a\+rwx", 0.8),
     # Git force operations
     (r"git\s+push\s+[^|]*--force", 0.7),

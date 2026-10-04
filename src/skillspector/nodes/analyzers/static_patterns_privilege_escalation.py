@@ -93,13 +93,19 @@ PE2_CODE_PATTERNS = [
     # Leading digit 2-7 selects setgid (2, 3, 6) or setuid (4, 5, 7).  A bare 1
     # only adds sticky, which grants nobody new access, so it stays unreported.
     # The pieces around the mode: 0* absorbs the leading zeros GNU and BSD chmod
-    # accept, the option group lets `chmod -R 4755 dir` reach the mode, the
-    # optional quotes cover `chmod "6755"`, and the trailing lookahead rejects a
-    # longer digit run (chmod 47554) as well as a malformed trailing word
-    # (chmod 4755x) while still matching every non-alphanumeric terminator
-    # (space, end of line, `;`, `&`, `|`, `)`, `$`, a quote or a backtick).
+    # accept, the optional [+=] accepts the operator GNU chmod allows in front of
+    # the digits (chmod +4000, chmod =4755), the option group lets
+    # `chmod -R 4755 dir` reach the mode, the optional quotes cover
+    # `chmod "6755"`, and the trailing lookahead rejects a longer digit run
+    # (chmod 47554) as well as a malformed trailing word (chmod 4755x) while still
+    # matching every non-alphanumeric terminator (space, end of line, `;`, `&`,
+    # `|`, `)`, `$`, a quote or a backtick).
+    # The option group takes a single leading dash on purpose: with `--?` a token
+    # starting `--` can be split between the two alternatives, and on a line of
+    # unmatched `-- ` tokens that made the match exponential.  `[\w=-]*` already
+    # absorbs the second dash of a long option, so `-` alone covers both.
     (
-        r"chmod\s+(?:--?[\w=-]*[ \t]+)*[\"']?0*[2-7][0-7]{3}[\"']?(?![0-9\w])",
+        r"chmod\s+(?:-[\w=-]*[ \t]+)*[\"']?[+=]?0*[2-7][0-7]{3}[\"']?(?![0-9\w])",
         0.8,
     ),
 ]
