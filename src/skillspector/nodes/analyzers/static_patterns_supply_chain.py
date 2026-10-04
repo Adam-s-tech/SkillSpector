@@ -86,6 +86,13 @@ from .osv_client import (
     was_osv_reachable,
 )
 from .pattern_defaults import PatternCategory
+from .static_patterns_tool_misuse import (
+    _ROOT_GLOB_COMMAND_CHARS,
+    _bounded_shell_tokens,
+    _markdown_shell_text,
+    _skip_backtick_substitution,
+    _skip_command_substitution,
+)
 from .static_runner import analyzer_finding_to_finding
 
 logger = get_logger(__name__)
@@ -142,6 +149,13 @@ SC2_PROSE_PATTERNS = [
     (r"run\s+(?:this|the)\s+(?:following\s+)?(?:curl|wget)\s+command", 0.6),
 ]
 SC2_PATTERNS = SC2_CODE_PATTERNS + SC2_PROSE_PATTERNS
+_SC2_SHELL_PATTERNS = frozenset(SC2_CODE_PATTERNS[:6])
+_SC2_FETCH_COMMAND = re.compile(r"(?:curl|wget)\s+", re.IGNORECASE)
+_SC2_SUBSTITUTION_START = re.compile(r"\$\(|`")
+_SC2_ATTACHED_EXECUTOR = re.compile(
+    r"(?:\||&&)\s*(?:sudo\s+)?(?:bash|sh|python3?|node|ruby|perl)",
+    re.IGNORECASE,
+)
 _INSTALLER_WARNING = re.compile(r"\b(?:warning|caution)\b", re.IGNORECASE)
 _INTERNAL_INSTALLER = re.compile(
     r"\binternal\b[^\n]{0,80}\binstaller\b|\binstaller\b[^\n]{0,80}\binternal\b",
@@ -1648,11 +1662,96 @@ def _version_lt(v1: str, v2: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _sc2_substitution_ranges(content: str, file_type: str) -> list[tuple[int, int]]:
+    """Locate nested output flows; Markdown fences are not shell backticks."""
+    shell_text = (
+        # Retain inline backticks conservatively: an instruction can document
+        # an output-to-interpreter substitution outside a fenced block too.
+        # Only fence delimiters prove that their ticks are not shell syntax.
+        _markdown_shell_text(content, lambda: None, complete_context=False)
+        if file_type in {"markdown", "text"}
+        else content
+    )
+    ranges: list[tuple[int, int]] = []
+    cursor = 0
+    while marker := _SC2_SUBSTITUTION_START.search(shell_text, cursor):
+        start = marker.start()
+        limit = min(len(shell_text), start + _ROOT_GLOB_COMMAND_CHARS)
+        skip = (
+            _skip_command_substitution if marker.group(0) == "$(" else _skip_backtick_substitution
+        )
+        end = skip(shell_text, start, limit)
+        if end is None:
+            ranges.append((start, len(content)))
+            break
+        ranges.append((start, end))
+        cursor = end
+    return ranges
+
+
+def _sc2_shell_command_ranges(content: str, file_type: str) -> tuple[tuple[int, int | None], ...]:
+    """Bound fetch/executor matches to a shell command without rewriting source.
+
+    A newline or semicolon after a completed fetch is not a pipe into an
+    interpreter elsewhere in the document. Reuse the bounded shell parser so
+    quoted newlines, line continuations and nested substitutions stay intact.
+    An unproved boundary retains the existing conservative regex behavior.
+    """
+    ranges: list[tuple[int, int | None]] = []
+    substitutions = _sc2_substitution_ranges(content, file_type)
+    substitution_index = 0
+    for fetch in _SC2_FETCH_COMMAND.finditer(content):
+        while (
+            substitution_index < len(substitutions)
+            and substitutions[substitution_index][1] <= fetch.start()
+        ):
+            substitution_index += 1
+        if (
+            substitution_index < len(substitutions)
+            and substitutions[substitution_index][0] < fetch.start()
+        ):
+            # A parent echo/printf can pass substitution output into a later
+            # interpreter. A child command's newline/closing delimiter does
+            # not prove that the fetch and outer executor are disconnected.
+            ranges.append((fetch.start(), None))
+            break
+        _, command_end, limited = _bounded_shell_tokens(content, fetch.start(), fetch.start() + 4)
+        if limited or content[command_end : command_end + 1] in {"'", '"', "`", ")"}:
+            # Preserve legacy nonoverlapping matching on uncertain syntax,
+            # rather than repeatedly parsing overlapping suffixes.
+            ranges.append((fetch.start(), None))
+            break
+        executor = _SC2_ATTACHED_EXECUTOR.match(content, command_end)
+        if executor is not None:
+            ranges.append((fetch.start(), executor.end()))
+    return tuple(ranges)
+
+
+def _iter_sc2_shell_matches(
+    pattern: str,
+    content: str,
+    command_ranges: tuple[tuple[int, int | None], ...],
+) -> Iterator[re.Match[str]]:
+    compiled = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+    covered = 0
+    for start, end in command_ranges:
+        if end is None:
+            yield from compiled.finditer(content, max(start, covered))
+            return
+        if start < covered:
+            continue
+        match = compiled.match(content, start, end)
+        if match is not None:
+            yield match
+            covered = match.end()
+
+
 def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFinding]:
     """Analyze content for supply chain patterns (SC1–SC3, SC7)."""
     findings: list[AnalyzerFinding] = []
     line_starts = logical_line_starts(content)
     content_lines = content.splitlines()
+    shell_command_ranges = _sc2_shell_command_ranges(content, file_type)
 
     def loc(ln: int) -> Location:
         return Location(file=file_path, start_line=ln)
@@ -1697,12 +1796,15 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
                     )
                 )
     for pattern, confidence in SC2_PATTERNS:
-        matches = (
-            static_runner.iter_paragraph_matches
-            if (pattern, confidence) in SC2_PROSE_PATTERNS
-            else re.finditer
-        )
-        for match in matches(pattern, content, re.IGNORECASE | re.MULTILINE):
+        if (pattern, confidence) in _SC2_SHELL_PATTERNS:
+            matches = _iter_sc2_shell_matches(pattern, content, shell_command_ranges)
+        elif (pattern, confidence) in SC2_PROSE_PATTERNS:
+            matches = static_runner.iter_paragraph_matches(
+                pattern, content, re.IGNORECASE | re.MULTILINE
+            )
+        else:
+            matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
+        for match in matches:
             line_num = line_number(match.start())
             mt = match.group(0)
             warned_internal_installer = _is_warned_internal_installer(
