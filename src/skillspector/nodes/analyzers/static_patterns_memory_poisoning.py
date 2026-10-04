@@ -215,7 +215,8 @@ _TIMESTAMP_DESCRIPTION_DIRECTIVE = re.compile(
     r"|\byour[ \t]+(?:memory|context|state|history|conversation|task|objective|"
     r"mission|instructions?)\b"
     # Nearby memory targets can redefine what the comment's "context" means.
-    r"|\b(?:conversation|memory|history)\b"
+    r"|\b(?:conversation|memory|history|chat|transcript|dialogue)\b"
+    r"|\b(?:instructions?|directives?|requirements?|orders?)\b"
     r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+on)[ \t]+"
     r"(?:(?:the[ \t]+)?(?:following|next|above|below)[ \t]+)?"
     r"(?:this|that|it|these|those|comments?|instructions?)\b"
@@ -225,7 +226,7 @@ _TIMESTAMP_DESCRIPTION_DIRECTIVE = re.compile(
     r"operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)\b"
     # Explicit references own the example independently of their action verb.
     r"|\b(?:this|that|these|those|next|following|above|below|displayed|shown|"
-    r"described|listed|same)[ \t]+"
+    r"described|listed|same|attached)[ \t]+"
     r"(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)\b"
     r"|\b(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)"
     r"[ \t]+(?:above|below|earlier|prior|previous|preceding|following|next)\b"
@@ -248,8 +249,8 @@ _TIMESTAMP_BACK_REFERENCE = re.compile(
     r"\b(?:this|that|it|these|those|above|earlier|prior|previous|preceding|"
     r"foregoing|same)\b"
     r"|\bcontext\b[^\r\n\v\f\x85\u2028\u2029]{0,160}"
-    r"\b(?:conversation|memory|history)\b"
-    r"|\b(?:conversation|memory|history)\b"
+    r"\b(?:conversation|memory|history|chat|transcript|dialogue)\b"
+    r"|\b(?:conversation|memory|history|chat|transcript|dialogue)\b"
     r"[^\r\n\v\f\x85\u2028\u2029]{0,160}\bcontext\b",
     re.IGNORECASE,
 )
