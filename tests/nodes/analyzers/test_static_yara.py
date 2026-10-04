@@ -535,11 +535,11 @@ def _perl_three_arg_dup_fixture() -> str:
 
 
 def _bash_reverse_shell_after_open_line_fixture() -> str:
-    """A ``bash -i >& /dev/tcp/...`` payload several lines below an unrelated
+    """A bash TCP reverse-shell payload several lines below an unrelated
     ``settings = open("settings.ini")`` line.
 
-    With the former ``$python_local_open`` helper string removed, the finding
-    must be located at the shell payload, not pulled up to the ``open`` line.
+    The finding must be located at the shell payload, not pulled up to the
+    earlier ``open`` line.
     """
     return base64.b64decode(
         "aW1wb3J0IG9zCnNldHRpbmdzID0gb3Blbigic2V0dGluZ3MuaW5pIikKaG9zdCA9ICIxMjcu"
@@ -1429,8 +1429,7 @@ class TestBuiltInMalwarePackaging:
         assert not _has_rule(findings, "reverse_shell")
 
     # ── Genuine shells must not be cancelled by an unrelated ``open`` ──────
-    # Regressions for the removed ``$python_local_open`` negative exclusion:
-    # a ``= open(`` anywhere in the file must never suppress real
+    # A ``= open(`` anywhere in the file must never suppress real
     # socket-redirection-plus-shell evidence.
 
     def test_reverse_shell_detects_shell_that_reads_file_before_dup2(self):
@@ -1508,9 +1507,8 @@ class TestBuiltInMalwarePackaging:
     # ── Location integrity (removed helper string no longer skews offsets) ──
 
     def test_reverse_shell_location_not_pulled_to_unrelated_open_line(self):
-        """With ``$python_local_open`` gone, a ``bash -i >& /dev/tcp/...``
-        payload must be located at the shell line, not at an earlier unrelated
-        ``settings = open(...)`` line. See
+        """A bash TCP reverse-shell payload must be located at the shell line,
+        not at an earlier unrelated ``settings = open(...)`` line. See
         `_bash_reverse_shell_after_open_line_fixture`."""
         findings = _run_builtin(
             _bash_reverse_shell_after_open_line_fixture(),
