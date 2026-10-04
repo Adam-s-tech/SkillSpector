@@ -1797,7 +1797,9 @@ def _sc2_shell_command_ranges(content: str, file_type: str) -> tuple[tuple[int, 
             # not prove that the fetch and outer executor are disconnected.
             ranges.append((fetch.start(), None))
             break
-        if _sc2_has_unproved_compound_context(proof_text, fetch.start(), fence_ends):
+        if _sc2_has_unproved_compound_context(
+            shell_text, fetch.start(), fence_ends
+        ) or _sc2_has_unproved_compound_context(proof_text, fetch.start(), fence_ends):
             ranges.append((fetch.start(), None))
             break
         fence_index = bisect_right(fence_starts, fetch.start())
@@ -1816,6 +1818,8 @@ def _sc2_shell_command_ranges(content: str, file_type: str) -> tuple[tuple[int, 
             or content[command_end : command_end + 1] in {"'", '"', "`", ")"}
             # CMD caret continuation is outside the Bourne parser's proof.
             or re.search(r"\^[ \t]*\r?$", content[fetch.start() : command_end]) is not None
+            # A logical-line view cannot turn argument data into a group close.
+            or _sc2_has_unproved_compound_context(shell_text, command_end, fence_ends)
             or _sc2_has_unproved_compound_context(proof_text, command_end, fence_ends)
         ):
             # Preserve legacy nonoverlapping matching on uncertain syntax,
