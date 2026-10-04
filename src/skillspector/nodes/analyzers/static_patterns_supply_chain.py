@@ -1766,17 +1766,20 @@ def _sc2_shell_command_ranges(content: str, file_type: str) -> tuple[tuple[int, 
         if file_type in {"markdown", "text"}
         else content
     )
+    proof_text = shell_text
     if file_type in {"markdown", "text"}:
-        # Documentation follows the scanner's logical-line contract. Keep
-        # every source offset while giving the shell parser a consistent view.
-        shell_text = LOGICAL_LINE_BREAK.sub(
+        # Logical lines establish documentary ownership, but Unicode/control
+        # separators remain native shell argument data during command parsing.
+        proof_text = LOGICAL_LINE_BREAK.sub(
             lambda line_break: "\n" + " " * (len(line_break.group(0)) - 1), shell_text
         )
-    fence_ends = tuple(
-        fence.end()
+    fences = tuple(
+        (fence.start(), fence.end())
         for fence in _SC2_FENCE_LINE.finditer(content)
         if shell_text[fence.start("marker") : fence.end("marker")].isspace()
     )
+    fence_starts = tuple(start for start, _ in fences)
+    fence_ends = tuple(end for _, end in fences)
     substitutions = _sc2_substitution_ranges(shell_text)
     substitution_index = 0
     for fetch in _SC2_FETCH_COMMAND.finditer(content):
@@ -1794,18 +1797,26 @@ def _sc2_shell_command_ranges(content: str, file_type: str) -> tuple[tuple[int, 
             # not prove that the fetch and outer executor are disconnected.
             ranges.append((fetch.start(), None))
             break
-        if _sc2_has_unproved_compound_context(shell_text, fetch.start(), fence_ends):
+        if _sc2_has_unproved_compound_context(proof_text, fetch.start(), fence_ends):
             ranges.append((fetch.start(), None))
             break
-        _, command_end, limited = _bounded_shell_tokens(
-            shell_text, fetch.start(), fetch.start() + 4
+        fence_index = bisect_right(fence_starts, fetch.start())
+        document_end = fence_starts[fence_index] if fence_index < len(fences) else len(content)
+        parse_start = max(0, fetch.start() - _ROOT_GLOB_COMMAND_CHARS)
+        # One extra character distinguishes a parser limit from a genuine EOF.
+        parse_end = min(document_end, fetch.start() + 4 + _ROOT_GLOB_COMMAND_CHARS + 1)
+        _, local_end, limited = _bounded_shell_tokens(
+            shell_text[parse_start:parse_end],
+            fetch.start() - parse_start,
+            fetch.start() + 4 - parse_start,
         )
+        command_end = parse_start + local_end
         if (
             limited
             or content[command_end : command_end + 1] in {"'", '"', "`", ")"}
             # CMD caret continuation is outside the Bourne parser's proof.
             or re.search(r"\^[ \t]*\r?$", content[fetch.start() : command_end]) is not None
-            or _sc2_has_unproved_compound_context(shell_text, command_end, fence_ends)
+            or _sc2_has_unproved_compound_context(proof_text, command_end, fence_ends)
         ):
             # Preserve legacy nonoverlapping matching on uncertain syntax,
             # rather than repeatedly parsing overlapping suffixes.
