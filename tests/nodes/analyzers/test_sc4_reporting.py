@@ -247,7 +247,10 @@ def test_confirmed_empty_llm_text_preserves_sc4_evidence_in_reports(
     assert confirmed.severity == original.severity
     assert confirmed.confidence == max(original.confidence, 0.7)
     assert confirmed.finding_id == original.finding_id
-    assert confirmed.evidence == original.evidence
+    assert confirmed.evidence.items() >= original.evidence.items()
+    assert confirmed.evidence["llm_review_outcome"] == "confirmed"
+    assert confirmed.evidence["llm_review_confidence"] == 0.7
+    assert "llm_review_outcome" not in original.evidence
     assert confirmed.occurrences == original.occurrences
     assert confirmed.tags == original.tags
     assert original.message == raw[0].message
@@ -293,6 +296,63 @@ def test_coarse_sc4_confirmation_retains_each_findings_own_guidance():
     confirmed = _confirmed_sc4([first, second], coarse=True)
     assert [f.explanation for f in confirmed] == [first.explanation, second.explanation]
     assert [f.remediation for f in confirmed] == [first.remediation, second.remediation]
+
+
+@pytest.mark.parametrize("binding", ["id", "swapped", "unknown"])
+@pytest.mark.parametrize("text", ["", " \t\n"])
+def test_sc4_guidance_survives_id_and_location_assessment_binding(binding, text):
+    first = Finding(
+        rule_id="SC4",
+        finding_id="first",
+        message="unknown version",
+        file="requirements.txt",
+        start_line=3,
+        explanation="Resolved version is unknown.",
+        remediation="Resolve the version first.",
+        evidence={"kind": "unknown-version"},
+    )
+    second = replace(
+        first,
+        finding_id="second",
+        start_line=3 if binding == "id" else 7,
+        message="lookup failed",
+        explanation="Coverage is incomplete.",
+        remediation="Retry the lookup.",
+        evidence={"kind": "failed-lookup"},
+    )
+    originals = [first, second]
+    analyzer = LLMMetaAnalyzer.__new__(LLMMetaAnalyzer)
+    batch = Batch(file_path=first.file, content="", findings=originals)
+    ids = ["first", "second"] if binding == "id" else ["second", "first"]
+    if binding == "unknown":
+        ids = ["unknown-first", "unknown-second"]
+    response = MetaAnalyzerResult(
+        findings=[
+            MetaAnalyzerFinding(
+                finding_id=finding_id,
+                pattern_id="SC4",
+                start_line=original.start_line,
+                is_vulnerability=True,
+                confidence=0.7,
+                intent="negligent",
+                impact="low",
+                explanation=text,
+                remediation=text,
+            )
+            for original, finding_id in zip(originals, ids, strict=True)
+        ]
+    )
+    confirmed = analyzer.apply_filter(
+        originals, [(batch, analyzer.parse_response(response, batch))]
+    )
+    for original, returned in zip(originals, confirmed, strict=True):
+        assert returned.finding_id == original.finding_id
+        assert returned.explanation == original.explanation
+        assert returned.remediation == original.remediation
+        assert returned.evidence.items() >= original.evidence.items()
+        assert returned.evidence["llm_review_outcome"] == "confirmed"
+        assert returned.evidence["llm_review_confidence"] == 0.7
+        assert "llm_review_outcome" not in original.evidence
 
 
 @pytest.mark.parametrize(
