@@ -233,10 +233,10 @@ _TIMESTAMP_DESCRIPTION_DIRECTIVE = re.compile(
     r"mission|instructions?)\b"
     # Nearby memory targets can redefine what the comment's "context" means.
     r"|\b(?:conversation|memory|history|chat|transcript|dialogue)\b"
-    r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+on)[ \t]+"
+    r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+(?:on|upon))[ \t]+"
     r"(?:(?:the[ \t]+)?(?:following|next|above|below)[ \t]+)?"
     r"(?:this|that|it|these|those|comments?|instructions?)\b"
-    r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+on)\b"
+    r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+(?:on|upon))\b"
     r"[^\r\n\v\f\x85\u2028\u2029]{0,160}"
     r"\b(?:described|displayed|documented|shown|listed|comments?|examples?|"
     r"operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)\b"
@@ -250,7 +250,7 @@ _TIMESTAMP_BACK_REFERENCE = re.compile(
     r"(?:comments?|examples?|operations?|actions?|steps?|instructions?)\b"
     r"|\b(?:comments?|examples?|operations?|actions?|steps?|instructions?)"
     r"[ \t]+(?:above|earlier|prior|previous|preceding|foregoing)\b"
-    r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+on|use|run|invoke)\b"
+    r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+(?:on|upon)|use|run|invoke)\b"
     r"[^\r\n\v\f\x85\u2028\u2029]{0,160}"
     r"\b(?:this|that|it|these|those|above|earlier|prior|previous|preceding|"
     r"foregoing|same)\b"
@@ -389,7 +389,7 @@ def _normalize_timestamp_guard(content: str) -> str:
     normalized = " ".join(
         re.sub(
             r"^[ \t]*(?:(?:>|//)[ \t]*)*"
-            r"(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)?",
+            r"(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)?(?:#{1,6}[ \t]+)?",
             "",
             line,
         )
@@ -420,9 +420,13 @@ def _has_timestamp_back_reference(content: str, offset: int) -> bool:
 
 def _has_timestamp_authority_heading(content: str) -> bool:
     """Require a complete heading; URL or metadata colons cannot confer authority."""
+    regions = (
+        *LOGICAL_LINE_BREAK.split(content),
+        *re.split(rf"{_LOGICAL_BREAK}[ \t]*{_LOGICAL_BREAK}", content),
+    )
     return any(
         _TIMESTAMP_AUTHORITY_HEADING.fullmatch(_normalize_timestamp_guard(paragraph).strip())
-        for paragraph in re.split(rf"{_LOGICAL_BREAK}[ \t]*{_LOGICAL_BREAK}", content)
+        for paragraph in regions
     )
 
 
