@@ -156,6 +156,16 @@ _SC2_ATTACHED_EXECUTOR = re.compile(
     r"(?:\||&&)\s*(?:sudo\s+)?(?:bash|sh|python3?|node|ruby|perl)",
     re.IGNORECASE,
 )
+_SC2_FENCE_LINE = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})[^\r\n]*", re.MULTILINE)
+_SC2_COMPOUND_TOKEN = re.compile(
+    r"(?P<quoted>\"(?:\\.|[^\"\\])*\"|'[^']*')"
+    r"|(?P<escaped>\\[\s\S])"
+    r"|(?P<comment>(?<!\S)\#[^\r\n]*)"
+    r"|(?P<word>(?<![^\s;|&(){}])(?:if|fi|for|while|until|select|done|case|esac)"
+    r"(?=[\s;|&(){}]|\Z))"
+    r"|(?P<delimiter>[(){}])|(?P<unclosed_quote>['\"])",
+)
+_SC2_CLAUSE_PREFIX = re.compile(r"[ \t]*(?:(?:then|do|else|elif|time|!)[ \t]+)*")
 _INSTALLER_WARNING = re.compile(r"\b(?:warning|caution)\b", re.IGNORECASE)
 _INTERNAL_INSTALLER = re.compile(
     r"\binternal\b[^\n]{0,80}\binstaller\b|\binstaller\b[^\n]{0,80}\binternal\b",
@@ -1662,16 +1672,8 @@ def _version_lt(v1: str, v2: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _sc2_substitution_ranges(content: str, file_type: str) -> list[tuple[int, int]]:
+def _sc2_substitution_ranges(shell_text: str) -> list[tuple[int, int]]:
     """Locate nested output flows; Markdown fences are not shell backticks."""
-    shell_text = (
-        # Retain inline backticks conservatively: an instruction can document
-        # an output-to-interpreter substitution outside a fenced block too.
-        # Only fence delimiters prove that their ticks are not shell syntax.
-        _markdown_shell_text(content, lambda: None, complete_context=False)
-        if file_type in {"markdown", "text"}
-        else content
-    )
     ranges: list[tuple[int, int]] = []
     cursor = 0
     while marker := _SC2_SUBSTITUTION_START.search(shell_text, cursor):
@@ -1682,11 +1684,60 @@ def _sc2_substitution_ranges(content: str, file_type: str) -> list[tuple[int, in
         )
         end = skip(shell_text, start, limit)
         if end is None:
-            ranges.append((start, len(content)))
+            ranges.append((start, len(shell_text)))
             break
         ranges.append((start, end))
         cursor = end
     return ranges
+
+
+def _sc2_has_unproved_compound_context(
+    content: str, offset: int, fence_ends: tuple[int, ...]
+) -> bool:
+    """A child terminator cannot disconnect an enclosing command's output flow.
+
+    This is a conservative ownership guard, not a compound-shell evaluator.
+    Balanced quotes and comments cannot close a parent group. Unclosed groups,
+    conditionals, loops, case statements and truncated context retain legacy
+    evidence rather than granting a single-command boundary.
+    """
+    start = max(0, offset - _ROOT_GLOB_COMMAND_CHARS)
+    fence_index = bisect_right(fence_ends, offset)
+    if fence_index and fence_ends[fence_index - 1] >= start:
+        start = fence_ends[fence_index - 1]
+    elif start > 0:
+        return True
+    stack: list[str] = []
+    endings = {
+        "if": "fi",
+        "for": "done",
+        "while": "done",
+        "until": "done",
+        "select": "done",
+        "case": "esac",
+        "(": ")",
+        "{": "}",
+    }
+    for token in _SC2_COMPOUND_TOKEN.finditer(content, start, offset):
+        if token.lastgroup == "unclosed_quote":
+            return True
+        if token.lastgroup not in {"word", "delimiter"}:
+            continue
+        value = token.group(0)
+        if token.lastgroup == "word":
+            boundary = max(content.rfind(char, start, token.start()) for char in "\n;|&(){}")
+            if _SC2_CLAUSE_PREFIX.fullmatch(content[boundary + 1 : token.start()]) is None:
+                continue
+        if value in endings:
+            stack.append(endings[value])
+        elif stack and value == stack[-1]:
+            stack.pop()
+        elif value in {"fi", "done", "esac", "}"}:
+            return True
+        # A case arm's ')' is not a parenthesis-group close.
+        elif value == ")" and ")" in stack:
+            return True
+    return bool(stack)
 
 
 def _sc2_shell_command_ranges(content: str, file_type: str) -> tuple[tuple[int, int | None], ...]:
@@ -1698,7 +1749,18 @@ def _sc2_shell_command_ranges(content: str, file_type: str) -> tuple[tuple[int, 
     An unproved boundary retains the existing conservative regex behavior.
     """
     ranges: list[tuple[int, int | None]] = []
-    substitutions = _sc2_substitution_ranges(content, file_type)
+    # Project fence delimiters once. Inline ticks remain conservative shell syntax.
+    shell_text = (
+        _markdown_shell_text(content, lambda: None, complete_context=False)
+        if file_type in {"markdown", "text"}
+        else content
+    )
+    fence_ends = tuple(
+        fence.end()
+        for fence in _SC2_FENCE_LINE.finditer(content)
+        if shell_text[fence.start("marker") : fence.end("marker")].isspace()
+    )
+    substitutions = _sc2_substitution_ranges(shell_text)
     substitution_index = 0
     for fetch in _SC2_FETCH_COMMAND.finditer(content):
         while (
@@ -1715,8 +1777,15 @@ def _sc2_shell_command_ranges(content: str, file_type: str) -> tuple[tuple[int, 
             # not prove that the fetch and outer executor are disconnected.
             ranges.append((fetch.start(), None))
             break
+        if _sc2_has_unproved_compound_context(content, fetch.start(), fence_ends):
+            ranges.append((fetch.start(), None))
+            break
         _, command_end, limited = _bounded_shell_tokens(content, fetch.start(), fetch.start() + 4)
-        if limited or content[command_end : command_end + 1] in {"'", '"', "`", ")"}:
+        if (
+            limited
+            or content[command_end : command_end + 1] in {"'", '"', "`", ")"}
+            or _sc2_has_unproved_compound_context(content, command_end, fence_ends)
+        ):
             # Preserve legacy nonoverlapping matching on uncertain syntax,
             # rather than repeatedly parsing overlapping suffixes.
             ranges.append((fetch.start(), None))
