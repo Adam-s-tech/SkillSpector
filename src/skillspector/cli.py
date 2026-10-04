@@ -45,7 +45,7 @@ from rich.tree import Tree
 from skillspector import __version__, transitive
 from skillspector.cleanup import cleanup_result
 from skillspector.constants import RISK_THRESHOLD
-from skillspector.graph import graph
+from skillspector.graph_proxy import graph
 from skillspector.input_handler import validate_local_input_path
 from skillspector.inspection_ledger import (
     MAX_INSPECTION_LEDGER_EVENTS,
@@ -59,7 +59,12 @@ from skillspector.inspection_ledger import (
 from skillspector.logging_config import get_logger, set_level
 from skillspector.mcp_registry import scan_registry
 from skillspector.models import Finding
-from skillspector.multi_skill import MultiSkillDetectionResult, SkillDirectory, detect_skills
+from skillspector.multi_skill import (
+    MultiSkillDetectionResult,
+    SkillDirectory,
+    _manifest_file,
+    detect_skills,
+)
 from skillspector.nodes.analyzers import ANALYZER_MODULES, ANALYZER_NODE_IDS
 from skillspector.nodes.report import report
 from skillspector.sarif_models import SARIF_SCHEMA_URI, validate_sarif_report
@@ -178,6 +183,7 @@ class _CachedTransitiveResult:
     artifact_references: list[dict[str, object]]
     has_executable_scripts: bool
     execution_successful: bool
+    meta_review_required: bool
     refs: list[str]
 
 
@@ -315,6 +321,7 @@ def _scan_state(
     baseline: Path | None = None,
     show_suppressed: bool = False,
     source_local_only: bool = False,
+    exclude_patterns: list[str] | None = None,
 ) -> dict[str, object]:
     """Build initial graph state from scan CLI args."""
     state: dict[str, object] = {
@@ -324,6 +331,8 @@ def _scan_state(
         "llm_requested": not no_llm,
         "source_local_only": source_local_only,
     }
+    if exclude_patterns:
+        state["exclude_patterns"] = list(exclude_patterns)
     if yara_rules_dir is not None:
         state["yara_rules_dir"] = yara_rules_dir
     if baseline is not None:
@@ -356,7 +365,7 @@ def _write_result(
             console.print(f"Report saved to: {output}")
     else:
         if format == FormatChoice.terminal:
-            console.print(report_body)
+            console.print(report_body, markup=False)
         else:
             print(report_body)
 
@@ -434,6 +443,14 @@ def scan(
             "--output",
             "-o",
             help="Output file path. If not specified, prints to stdout.",
+        ),
+    ] = None,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--exclude",
+            help="Exclude a relative POSIX path glob (repeatable). Local single-skill directories "
+            "only; exclusions are reported as uninspected, partial coverage. SKILL.md is required.",
         ),
     ] = None,
     no_llm: Annotated[
@@ -588,6 +605,19 @@ def scan(
         gemini_cli, and opencode_cli use their CLI's existing local
         authentication session.
     """
+    if exclude and (
+        recursive
+        or transitive_enabled
+        or mcp_registry
+        or not Path(input_path).is_dir()
+        or _manifest_file(Path(input_path)) is None
+    ):
+        err_console.print(
+            "[red]Error:[/red] --exclude requires a local single-skill directory with SKILL.md or skill.md "
+            "and cannot be combined with --recursive, --transitive, or --mcp-registry"
+        )
+        raise typer.Exit(code=2)
+
     if mcp_registry:
         if recursive or baseline is not None or show_suppressed or yara_rules_dir is not None:
             err_console.print(
@@ -701,6 +731,9 @@ def scan(
                 "[yellow]Warning:[/yellow] Skill discovery was incomplete; continuing "
                 "with a bounded scan and reporting partial coverage."
             )
+        if exclude and detection.is_multi_skill:
+            err_console.print("[red]Error:[/red] --exclude is not supported for multi-skill scans")
+            raise typer.Exit(code=2)
         if detection.is_multi_skill:
             discovery_console.print(
                 f"[yellow]Warning:[/yellow] Found {len(detection.skills)} skills in "
@@ -734,7 +767,8 @@ def scan(
 
     result = None
     try:
-        result = _scan_skill(
+        scan_skill = partial(_scan_skill, exclude_patterns=exclude) if exclude else _scan_skill
+        result = scan_skill(
             input_path=input_path,
             format=format,
             no_llm=no_llm,
@@ -1317,6 +1351,7 @@ def _cache_transitive_result(
         has_executable_scripts=bool(child_result.get("has_executable_scripts", False))
         or any(bool(entry.get("executable", False)) for entry in child_metadata),
         execution_successful=child_result.get("execution_successful") is not False,
+        meta_review_required=child_result.get("meta_review_required") is True,
         refs=extraction.references,
     )
 
@@ -1398,6 +1433,7 @@ def _run_graph_scan(
     initial_inspection_ledger: list[dict[str, object]] | None = None,
     source_local_only: bool = False,
     stream_progress: bool = False,
+    exclude_patterns: list[str] | None = None,
 ) -> dict[str, object]:
     state = _scan_state(
         input_path=input_path,
@@ -1407,6 +1443,7 @@ def _run_graph_scan(
         baseline=baseline,
         show_suppressed=show_suppressed,
         source_local_only=source_local_only,
+        exclude_patterns=exclude_patterns,
     )
     if transitive_traversal is not None:
         state["transitive_traversal_state"] = transitive_traversal
@@ -1502,11 +1539,14 @@ def _run_graph_scan_for_source(
     initial_inspection_ledger: list[dict[str, object]] | None = None,
     source_local_only: bool = False,
     stream_progress: bool = False,
+    exclude_patterns: list[str] | None = None,
 ) -> dict[str, object]:
     """Invoke a scan without widening the legacy call contract for public sources."""
     run_graph_scan = (
         partial(_run_graph_scan, stream_progress=True) if stream_progress else _run_graph_scan
     )
+    if exclude_patterns:
+        run_graph_scan = partial(run_graph_scan, exclude_patterns=exclude_patterns)
     if initial_inspection_ledger is not None:
         if source_local_only:
             return run_graph_scan(
@@ -1928,6 +1968,7 @@ def _scan_transitive(
         _coerce_component_metadata(initial_result.get("component_metadata")), None
     )[: traversal.budget.max_components]
     has_executable_scripts = bool(initial_result.get("has_executable_scripts", False))
+    merged_meta_review_required = initial_result.get("meta_review_required") is True
 
     root_extraction = transitive.extract_external_refs_with_metadata(
         local_file_cache,
@@ -2142,6 +2183,8 @@ def _scan_transitive(
                 )
                 if cached.has_executable_scripts:
                     has_executable_scripts = True
+                if cached.meta_review_required:
+                    merged_meta_review_required = True
                 _bounded_extend(
                     merged_components,
                     cached.components,
@@ -2276,6 +2319,7 @@ def _scan_transitive(
         "artifact_inventory": merged_artifact_inventory,
         "artifact_references": merged_artifact_references,
         "has_executable_scripts": has_executable_scripts,
+        "meta_review_required": merged_meta_review_required,
         "use_llm": initial_result.get("use_llm", not no_llm),
         "llm_requested": initial_result.get("llm_requested", not no_llm),
         "llm_call_log": merged_llm_call_log,
@@ -2326,6 +2370,7 @@ def _scan_transitive(
         merged_result["effective_finding_ids"] = effective_ids
     report_result = cast(dict[str, object], report(merged_result))
     report_result["analysis_completeness"] = merged_result.get("analysis_completeness", {})
+    report_result["meta_review_required"] = merged_meta_review_required
     report_result["temp_dir_for_cleanup"] = initial_result.get("temp_dir_for_cleanup")
     active_findings = _coerce_findings_list(report_result.get("filtered_findings"))
     report_result["transitive_finding_count"] = sum(
@@ -2364,6 +2409,7 @@ def _scan_skill(
     transitive_traversal: _TransitiveTraversalState | None = None,
     pre_scan_ledger_events: list[dict[str, object]] | None = None,
     source_local_only: bool = False,
+    exclude_patterns: list[str] | None = None,
 ) -> dict[str, object]:
     yara_dir = str(yara_rules_dir.resolve()) if yara_rules_dir else None
     active_visited: set[str] = set()
@@ -2380,8 +2426,11 @@ def _scan_skill(
     if transitive_enabled and transitive_traversal is None:
         transitive_traversal = _TransitiveTraversalState(cache=transitive_cache or {})
     stream_progress = not verbose and err_console.is_terminal
+    run_for_source = _run_graph_scan_for_source
+    if exclude_patterns:
+        run_for_source = partial(run_for_source, exclude_patterns=exclude_patterns)
     if pre_scan_ledger_events:
-        result = _run_graph_scan_for_source(
+        result = run_for_source(
             input_path=input_path,
             format=format,
             no_llm=no_llm,
@@ -2394,7 +2443,7 @@ def _scan_skill(
             stream_progress=stream_progress,
         )
     else:
-        result = _run_graph_scan_for_source(
+        result = run_for_source(
             input_path=input_path,
             format=format,
             no_llm=no_llm,
