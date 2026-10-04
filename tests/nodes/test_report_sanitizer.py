@@ -31,6 +31,7 @@ def _dirty_finding() -> Finding:
     return Finding(
         rule_id="E2",
         message="creds \x1b[31mleak\x1b[0m here\x00",
+        pattern="pattern \x1b[31mleak\x1b[0m here\x00",
         severity="HIGH",
         confidence=0.9,
         file="a/SKILL.md",
@@ -54,6 +55,7 @@ def test_sanitize_finding_cleans_text_fields_only() -> None:
     cleaned = _sanitize_finding(_dirty_finding())
     assert "\x1b" not in cleaned.message and "\x00" not in cleaned.message
     assert "leak" in cleaned.message and "here" in cleaned.message
+    assert cleaned.pattern == "pattern leak here"
     assert "\x1b" not in (cleaned.remediation or "")
     assert "\x07" not in (cleaned.context or "")
     assert "\x1b" not in (cleaned.pattern or "") and "\x00" not in (cleaned.pattern or "")
@@ -94,6 +96,7 @@ def test_report_redacts_url_credentials_from_every_finding_field(fmt: str, schem
         confidence=0.9,
         file="setup.sh",
         start_line=1,
+        pattern=url,
         finding=url,
         explanation=url,
         remediation=url,

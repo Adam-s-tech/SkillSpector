@@ -236,6 +236,8 @@ class SkillspectorState(TypedDict, total=False):
     # Input: resolve_input node consumes input_path or skill_path, sets skill_path
     input_path: str | None
     skill_path: str | None
+    # Relative identity of a wrapped/downloaded explicit file, distinct from passive assets.
+    primary_file_path: str | None
     # Set/reset by resolve_input from the actual selected source. None means
     # materialization could not establish a current-skill identity; analyzers
     # must not substitute generated directory names or manifest-only aliases.
@@ -305,6 +307,10 @@ class SkillspectorState(TypedDict, total=False):
     baseline_path: str | None
     show_suppressed: bool
     suppressed_findings: list[object]
+    # Kept findings as baseline suppression saw them: one per occurrence, before
+    # deduplication compacts them. `skillspector baseline` fingerprints these so
+    # every occurrence the next scan checks has its own entry.
+    active_findings: list[Finding]
 
     # Model IDs per LLM-using node: e.g. {"default": "...", "meta_analyzer": "..."}
     model_config: dict[str, str]
