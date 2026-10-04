@@ -1790,6 +1790,8 @@ def _sc2_shell_command_ranges(content: str, file_type: str) -> tuple[tuple[int, 
         if (
             limited
             or content[command_end : command_end + 1] in {"'", '"', "`", ")"}
+            # CMD caret continuation is outside the Bourne parser's proof.
+            or re.search(r"\^[ \t]*\r?$", content[fetch.start() : command_end]) is not None
             or _sc2_has_unproved_compound_context(content, command_end, fence_ends)
         ):
             # Preserve legacy nonoverlapping matching on uncertain syntax,

