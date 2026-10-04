@@ -218,10 +218,14 @@ _TIMESTAMP_OWNERSHIP_PATTERN = (
     r"[ \t]+(?:above|below|earlier|prior|previous|preceding|following|next)\b"
     r"|\b(?:following|next|above|below|this|that)\b[^\r\n]{0,80}"
     r"\b(?:order|directive|instruction|command)\b"
-    r"|\b(?:commands?|instructions?|directions?|directives?|orders?)\b"
-    r"[^\r\n]{0,80}:"
 )
 _TIMESTAMP_OWNERSHIP_REFERENCE = re.compile(_TIMESTAMP_OWNERSHIP_PATTERN, re.IGNORECASE)
+_TIMESTAMP_AUTHORITY_HEADING = re.compile(
+    r"(?:[A-Za-z]+[ \t]+){0,3}"
+    r"(?:commands?|instructions?|directions?|directives?|orders?|actions?|operations?|steps?|tasks?)"
+    r"(?=[ \t:]|$)[^:\r\n]{0,80}:[ \t]*",
+    re.IGNORECASE,
+)
 _TIMESTAMP_DESCRIPTION_DIRECTIVE = re.compile(
     r"\b(?:you|agents?|assistants?|models?|llms?|bots?|must|shall|should|"
     r"required|mandatory)\b"
@@ -259,7 +263,7 @@ _TIMESTAMP_BACK_REFERENCE = re.compile(
 _TIMESTAMP_REFERENCE_CUE = re.compile(
     r"\b(?:follow|obey|apply|execute|perform|do|carry|act|use|run|invoke|context|"
     r"described|displayed|documented|shown|listed|above|earlier|prior|previous|"
-    r"preceding|foregoing|same)\b",
+    r"preceding|foregoing|same|commands?|instructions?|directives?|requirements?|orders?)\b",
     re.IGNORECASE,
 )
 _CODE_FENCE_LINE = re.compile(r"[ \t]*(?:`{3,}|~{3,})[ \t]*")
@@ -399,15 +403,27 @@ def _has_timestamp_back_reference(content: str, offset: int) -> bool:
     window_end = min(len(content), offset + 512)
     window = content[offset:window_end]
     normalized = _normalize_timestamp_guard(window)
-    if _TIMESTAMP_BACK_REFERENCE.search(normalized) or _TIMESTAMP_OWNERSHIP_REFERENCE.search(
-        normalized
+    if (
+        _TIMESTAMP_BACK_REFERENCE.search(normalized)
+        or _TIMESTAMP_OWNERSHIP_REFERENCE.search(normalized)
+        or _has_timestamp_authority_heading(window)
     ):
         return True
     if window_end != len(content) and LOGICAL_LINE_BREAK.match(content, window_end) is None:
         # An unfinished reference cannot establish that the description is benign.
         last_paragraph = re.split(rf"{_LOGICAL_BREAK}[ \t]*{_LOGICAL_BREAK}", window)[-1]
-        return _TIMESTAMP_REFERENCE_CUE.search(last_paragraph) is not None
+        return (
+            _TIMESTAMP_REFERENCE_CUE.search(_normalize_timestamp_guard(last_paragraph)) is not None
+        )
     return False
+
+
+def _has_timestamp_authority_heading(content: str) -> bool:
+    """Require a complete heading; URL or metadata colons cannot confer authority."""
+    return any(
+        _TIMESTAMP_AUTHORITY_HEADING.fullmatch(_normalize_timestamp_guard(paragraph).strip())
+        for paragraph in re.split(rf"{_LOGICAL_BREAK}[ \t]*{_LOGICAL_BREAK}", content)
+    )
 
 
 def _is_benign_timestamp_context_description(content: str, match: re.Match[str]) -> bool:
@@ -451,7 +467,9 @@ def _is_benign_timestamp_context_description(content: str, match: re.Match[str])
             )
         ):
             continue
-        if _TIMESTAMP_DESCRIPTION_DIRECTIVE.search(_normalize_timestamp_guard(preceding)):
+        if _TIMESTAMP_DESCRIPTION_DIRECTIVE.search(
+            _normalize_timestamp_guard(preceding)
+        ) or _has_timestamp_authority_heading(preceding):
             continue
 
         next_line, next_complete = _bounded_next_nonblank_line(content, candidate.end())
@@ -481,6 +499,7 @@ def _is_benign_timestamp_context_description(content: str, match: re.Match[str])
             following is None
             or _NEXT_LINE_REFERENCE.search(_normalize_timestamp_guard(following))
             or _TIMESTAMP_DESCRIPTION_DIRECTIVE.search(_normalize_timestamp_guard(following))
+            or _has_timestamp_authority_heading(following)
         ):
             continue
         return True
