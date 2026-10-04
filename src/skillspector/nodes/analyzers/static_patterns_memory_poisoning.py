@@ -209,6 +209,19 @@ _TIMESTAMP_DISPLAY = re.compile(
     r'"[ \t]*,[ \t]*\$(?:realtime|time)[ \t]*\)[ \t]*;[ \t]*'
     r"(?://[^\r\n\v\f\x85\u2028\u2029]*)?"
 )
+_TIMESTAMP_OWNERSHIP_PATTERN = (
+    r"\b(?:instructions?|directives?|requirements?|orders?)\b"
+    r"|\b(?:the|this|that|these|those|next|following|above|below|displayed|shown|"
+    r"described|listed|same|attached)[ \t]+"
+    r"(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)\b"
+    r"|\b(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)"
+    r"[ \t]+(?:above|below|earlier|prior|previous|preceding|following|next)\b"
+    r"|\b(?:following|next|above|below|this|that)\b[^\r\n]{0,80}"
+    r"\b(?:order|directive|instruction|command)\b"
+    r"|\b(?:commands?|instructions?|directions?|directives?|orders?)\b"
+    r"[^\r\n]{0,80}:"
+)
+_TIMESTAMP_OWNERSHIP_REFERENCE = re.compile(_TIMESTAMP_OWNERSHIP_PATTERN, re.IGNORECASE)
 _TIMESTAMP_DESCRIPTION_DIRECTIVE = re.compile(
     r"\b(?:you|agents?|assistants?|models?|llms?|bots?|must|shall|should|"
     r"required|mandatory)\b"
@@ -216,7 +229,6 @@ _TIMESTAMP_DESCRIPTION_DIRECTIVE = re.compile(
     r"mission|instructions?)\b"
     # Nearby memory targets can redefine what the comment's "context" means.
     r"|\b(?:conversation|memory|history|chat|transcript|dialogue)\b"
-    r"|\b(?:instructions?|directives?|requirements?|orders?)\b"
     r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+on)[ \t]+"
     r"(?:(?:the[ \t]+)?(?:following|next|above|below)[ \t]+)?"
     r"(?:this|that|it|these|those|comments?|instructions?)\b"
@@ -224,18 +236,8 @@ _TIMESTAMP_DESCRIPTION_DIRECTIVE = re.compile(
     r"[^\r\n\v\f\x85\u2028\u2029]{0,160}"
     r"\b(?:described|displayed|documented|shown|listed|comments?|examples?|"
     r"operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)\b"
-    # Explicit references own the example independently of their action verb.
-    r"|\b(?:this|that|these|those|next|following|above|below|displayed|shown|"
-    r"described|listed|same|attached)[ \t]+"
-    r"(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)\b"
-    r"|\b(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?|snippets?|samples?)"
-    r"[ \t]+(?:above|below|earlier|prior|previous|preceding|following|next)\b"
-    r"|\b(?:following|next|above|below|this|that)\b[^\r\n]{0,80}"
-    r"\b(?:order|directive|instruction|command)\b"
     r"|\b(?:task|instructions?|directives?)[ \t]*:"
-    r"|\b(?:commands?|instructions?|directions?|directives?|orders?)\b"
-    r"[^\r\n]{0,80}:"
-    r"|\bbefore[ \t]+(?:replying|responding|answering)\b",
+    r"|\bbefore[ \t]+(?:replying|responding|answering)\b" + "|" + _TIMESTAMP_OWNERSHIP_PATTERN,
     re.IGNORECASE,
 )
 _TIMESTAMP_BACK_REFERENCE = re.compile(
@@ -380,7 +382,7 @@ def _bounded_timestamp_following_context(content: str, offset: int) -> str | Non
 
 def _normalize_timestamp_guard(content: str) -> str:
     """Join wrapped directives for boolean guards without changing source evidence."""
-    return " ".join(
+    normalized = " ".join(
         re.sub(
             r"^[ \t]*(?:(?:>|//)[ \t]*)*"
             r"(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)?",
@@ -389,6 +391,7 @@ def _normalize_timestamp_guard(content: str) -> str:
         )
         for line in LOGICAL_LINE_BREAK.split(content)
     )
+    return re.sub(r"[`*_\[\]]", "", normalized)
 
 
 def _has_timestamp_back_reference(content: str, offset: int) -> bool:
@@ -396,7 +399,9 @@ def _has_timestamp_back_reference(content: str, offset: int) -> bool:
     window_end = min(len(content), offset + 512)
     window = content[offset:window_end]
     normalized = _normalize_timestamp_guard(window)
-    if _TIMESTAMP_BACK_REFERENCE.search(normalized):
+    if _TIMESTAMP_BACK_REFERENCE.search(normalized) or _TIMESTAMP_OWNERSHIP_REFERENCE.search(
+        normalized
+    ):
         return True
     if window_end != len(content) and LOGICAL_LINE_BREAK.match(content, window_end) is None:
         # An unfinished reference cannot establish that the description is benign.
@@ -435,10 +440,7 @@ def _is_benign_timestamp_context_description(content: str, match: re.Match[str])
                 continue
         # Direct reuse of the immediately preceding text cannot grant ownership
         # to a descriptive example, regardless of the directive's action verb.
-        if any(
-            reference.group(0).strip() != ":"
-            for reference in _PRECEDING_DIRECTIVE.finditer(previous_line)
-        ):
+        if _PRECEDING_DIRECTIVE.search(_normalize_timestamp_guard(previous_line)):
             continue
         preceding = content[max(0, candidate.start() - 512) : candidate.start()]
         nearest_paragraph = re.split(rf"{_LOGICAL_BREAK}[ \t]*{_LOGICAL_BREAK}", preceding)[-1]
