@@ -160,12 +160,13 @@ _SC2_FENCE_LINE = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})[^\r\n]*", re.MULTI
 _SC2_COMPOUND_TOKEN = re.compile(
     r"(?P<quoted>\"(?:\\.|[^\"\\])*\"|'[^']*')"
     r"|(?P<escaped>\\[\s\S])"
-    r"|(?P<comment>(?<!\S)\#[^\r\n]*)"
+    r"|(?P<comment>(?<![^\s;&|()<>])\#[^\r\n]*)"
+    r"|(?P<heredoc><{2})"
     r"|(?P<word>(?<![^\s;|&(){}])(?:if|fi|for|while|until|select|done|case|esac)"
     r"(?=[\s;|&(){}]|\Z))"
-    r"|(?P<delimiter>[(){}])|(?P<unclosed_quote>['\"])",
+    r"|(?P<delimiter>[(){}])|(?P<unclosed_quote>['\"`])",
 )
-_SC2_CLAUSE_PREFIX = re.compile(r"[ \t]*(?:(?:then|do|else|elif|time|!)[ \t]+)*")
+_SC2_CLAUSE_PREFIX = re.compile(r"[ \t]*(?:(?:then|do|else|elif|time(?:[ \t]+-p)?|!)[ \t]+)*")
 _INSTALLER_WARNING = re.compile(r"\b(?:warning|caution)\b", re.IGNORECASE)
 _INTERNAL_INSTALLER = re.compile(
     r"\binternal\b[^\n]{0,80}\binstaller\b|\binstaller\b[^\n]{0,80}\binternal\b",
@@ -1719,14 +1720,19 @@ def _sc2_has_unproved_compound_context(
         "{": "}",
     }
     for token in _SC2_COMPOUND_TOKEN.finditer(content, start, offset):
-        if token.lastgroup == "unclosed_quote":
+        if token.lastgroup in {"unclosed_quote", "heredoc"}:
+            return True
+        if token.lastgroup == "escaped" and any(char in token.group(0) for char in "\r\n"):
+            # Shell lexing removes continuations before recognizing reserved words.
             return True
         if token.lastgroup not in {"word", "delimiter"}:
             continue
         value = token.group(0)
-        if token.lastgroup == "word":
+        if token.lastgroup == "word" or value == "}":
             boundary = max(content.rfind(char, start, token.start()) for char in "\n;|&(){}")
             if _SC2_CLAUSE_PREFIX.fullmatch(content[boundary + 1 : token.start()]) is None:
+                if value == "}":
+                    return True
                 continue
         if value in endings:
             stack.append(endings[value])
