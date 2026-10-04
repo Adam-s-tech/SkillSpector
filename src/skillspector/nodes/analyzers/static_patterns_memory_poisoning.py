@@ -215,13 +215,22 @@ _TIMESTAMP_DESCRIPTION_DIRECTIVE = re.compile(
     r"mission|instructions?)\b"
     # Nearby memory targets can redefine what the comment's "context" means.
     r"|\b(?:conversation|memory|history)\b"
-    r"|\b(?:follow|obey|apply|execute|perform|do)[ \t]+"
+    r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+on)[ \t]+"
     r"(?:(?:the[ \t]+)?(?:following|next|above|below)[ \t]+)?"
     r"(?:this|that|it|these|those|comments?|instructions?)\b"
-    r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out)\b"
+    r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+on)\b"
     r"[^\r\n\v\f\x85\u2028\u2029]{0,160}"
     r"\b(?:described|displayed|documented|shown|listed|comments?|examples?|"
-    r"operations?|actions?|steps?)\b"
+    r"operations?|actions?|steps?|instructions?|directives?|lines?)\b"
+    # Explicit references own the example independently of their action verb.
+    r"|\b(?:this|that|these|those|next|following|above|below|displayed|shown|"
+    r"described|listed|same)[ \t]+"
+    r"(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?)\b"
+    r"|\b(?:comments?|examples?|operations?|actions?|steps?|instructions?|directives?|lines?)"
+    r"[ \t]+(?:above|below|earlier|prior|previous|preceding|following|next)\b"
+    r"|\b(?:following|next|above|below|this|that)\b[^\r\n]{0,80}"
+    r"\b(?:order|directive|instruction|command)\b"
+    r"|\b(?:task|instructions?|directives?)[ \t]*:"
     r"|\bbefore[ \t]+(?:replying|responding|answering)\b",
     re.IGNORECASE,
 )
@@ -231,7 +240,7 @@ _TIMESTAMP_BACK_REFERENCE = re.compile(
     r"(?:comments?|examples?|operations?|actions?|steps?|instructions?)\b"
     r"|\b(?:comments?|examples?|operations?|actions?|steps?|instructions?)"
     r"[ \t]+(?:above|earlier|prior|previous|preceding|foregoing)\b"
-    r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|use|run|invoke)\b"
+    r"|\b(?:follow|obey|apply|execute|perform|do|carry[ \t]+out|act[ \t]+on|use|run|invoke)\b"
     r"[^\r\n\v\f\x85\u2028\u2029]{0,160}"
     r"\b(?:this|that|it|these|those|above|earlier|prior|previous|preceding|"
     r"foregoing|same)\b"
@@ -242,7 +251,7 @@ _TIMESTAMP_BACK_REFERENCE = re.compile(
     re.IGNORECASE,
 )
 _TIMESTAMP_REFERENCE_CUE = re.compile(
-    r"\b(?:follow|obey|apply|execute|perform|do|carry|use|run|invoke|context|"
+    r"\b(?:follow|obey|apply|execute|perform|do|carry|act|use|run|invoke|context|"
     r"described|displayed|documented|shown|listed|above|earlier|prior|previous|"
     r"preceding|foregoing|same)\b",
     re.IGNORECASE,
@@ -365,14 +374,18 @@ def _bounded_timestamp_following_context(content: str, offset: int) -> str | Non
     return window if window_end == len(content) else None
 
 
+def _normalize_timestamp_guard(content: str) -> str:
+    """Join wrapped directives for boolean guards without changing source evidence."""
+    return " ".join(
+        re.sub(r"^[ \t]*//[ \t]*", "", line) for line in LOGICAL_LINE_BREAK.split(content)
+    )
+
+
 def _has_timestamp_back_reference(content: str, offset: int) -> bool:
     """Keep explicit reuse visible across paragraph and independent-block boundaries."""
     window_end = min(len(content), offset + 512)
     window = content[offset:window_end]
-    # Wrapping must not split an explicit reference into apparently unrelated lines.
-    normalized = " ".join(
-        re.sub(r"^[ \t]*//[ \t]*", "", line) for line in LOGICAL_LINE_BREAK.split(window)
-    )
+    normalized = _normalize_timestamp_guard(window)
     if _TIMESTAMP_BACK_REFERENCE.search(normalized):
         return True
     if window_end != len(content) and LOGICAL_LINE_BREAK.match(content, window_end) is None:
@@ -409,7 +422,7 @@ def _is_benign_timestamp_context_description(content: str, match: re.Match[str])
             if not previous_complete:
                 continue
         preceding = content[max(0, candidate.start() - 512) : candidate.start()]
-        if _TIMESTAMP_DESCRIPTION_DIRECTIVE.search(preceding):
+        if _TIMESTAMP_DESCRIPTION_DIRECTIVE.search(_normalize_timestamp_guard(preceding)):
             continue
 
         next_line, next_complete = _bounded_next_nonblank_line(content, candidate.end())
@@ -437,8 +450,8 @@ def _is_benign_timestamp_context_description(content: str, match: re.Match[str])
         following = _bounded_timestamp_following_context(content, display_end)
         if (
             following is None
-            or _NEXT_LINE_REFERENCE.search(following)
-            or _TIMESTAMP_DESCRIPTION_DIRECTIVE.search(following)
+            or _NEXT_LINE_REFERENCE.search(_normalize_timestamp_guard(following))
+            or _TIMESTAMP_DESCRIPTION_DIRECTIVE.search(_normalize_timestamp_guard(following))
         ):
             continue
         return True
