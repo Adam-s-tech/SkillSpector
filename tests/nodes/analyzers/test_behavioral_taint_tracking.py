@@ -900,3 +900,52 @@ class TestFixpointTermination:
         code = 'import os\nx = os.getenv("A")\nx = y\ny = os.environ["B"]\ny = z\nz = x\n'
         sources = _collect(code)  # check_runtime=None
         assert set(sources) == {"x", "y", "z"}
+
+    def test_wide_unpacking_fires_each_assignment_once(self, monkeypatch) -> None:
+        """A wide propagating assignment must fire once, not once per read name.
+
+        The reviewer's remaining blocker: `propagators` stored each propagating
+        assignment once per distinct name its value reads, so for
+
+            s0, s1, ..., sK = os.getenv("X")     # K names, seeded directly
+            t0, t1, ..., tK' = s0, s1, ..., sK    # one Assign, K' targets
+
+        draining each of the K tainted read names re-ran ``_mark_targets`` over
+        the whole K'-target list, giving K x K' work. A ``check_runtime`` call
+        cap cannot see this (the drain makes only K + 1 checks). So count
+        ``_mark_targets`` calls directly and assert each assignment fires at
+        most once: the total is bounded by the number of assignments, not by
+        names read x targets.
+        """
+        width = 2000
+        reads = ", ".join(f"s{i}" for i in range(width))
+        targets = ", ".join(f"t{i}" for i in range(width))
+        code = (
+            "import os\n"
+            f'{reads} = os.getenv("X")\n'  # direct source: taints s0..s{width-1}
+            f"{targets} = {reads}\n"  # one propagating Assign with `width` targets
+        )
+
+        # There are exactly two Assign statements; linear drain must not call
+        # _mark_targets more than once per assignment.
+        n_assignments = 2
+        calls = {"n": 0}
+        orig_mark_targets = behavioral_taint_tracking._mark_targets
+
+        def counting_mark_targets(*args, **kwargs):
+            calls["n"] += 1
+            return orig_mark_targets(*args, **kwargs)
+
+        monkeypatch.setattr(behavioral_taint_tracking, "_mark_targets", counting_mark_targets)
+
+        start = time.monotonic()
+        sources = _collect(code, _capped_check_runtime(width * 20))
+        elapsed = time.monotonic() - start
+
+        # Fire-once: one call seeds the direct source, one fires the propagator.
+        # The quadratic shape would call _mark_targets `width` times in the drain.
+        assert calls["n"] <= n_assignments
+        # All read and target names are tainted, all tracing to os.getenv.
+        assert len(sources) == 2 * width
+        assert all(src == "os.getenv" for src in sources.values())
+        assert elapsed < 1.0

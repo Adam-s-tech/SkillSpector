@@ -480,24 +480,32 @@ def _collect_tainted(
     using a monotone worklist:
 
     * One pass over every ``Assign`` seeds the tainted set from direct sources
-      (source calls and credential subscripts) and indexes every propagating
-      assignment (``b = a``; ``payload = {"k": secret}``) by each name its
-      value reads, as ``referenced_name -> [(targets, lineno), ...]``.
-    * The worklist then drains newly tainted names, tainting the targets of
-      every assignment that reads them, enqueuing only names not already
-      tainted.
+      (source calls and credential subscripts) and records every propagating
+      assignment (``b = a``; ``payload = {"k": secret}``) once, keyed by a
+      stable id, then indexes it by each name its value reads, as
+      ``referenced_name -> [assignment_id, ...]``.
+    * The worklist then drains newly tainted names, firing each assignment that
+      reads a drained name AT MOST ONCE total: the first time any name it reads
+      becomes tainted, its targets are marked and enqueued; later drains of its
+      other reading names skip it. Only names not already tainted are enqueued.
 
     Taint is add-only — an entry is never overwritten or removed — so the set
     can only grow and is bounded by the number of assigned names. The loop
-    therefore cannot oscillate and is guaranteed to terminate. Each name is
-    dequeued once and each propagating assignment fires once per name it
-    reads, so the work is linear in the number of assignments plus references
-    rather than quadratic in the length of the longest chain.
+    therefore cannot oscillate and is guaranteed to terminate. Firing an
+    assignment a second time is sound to skip: its targets are all tainted
+    after the first firing, so a later firing could only re-taint names and
+    add nothing. Each name is dequeued once and each propagating assignment
+    fires at most once, so the work is linear in the number of assignments
+    plus references — not quadratic in the longest chain, nor K×K' for a wide
+    ``a, b, ... = source`` statement read by many tainted names.
     """
     tainted: dict[str, _TaintedVar] = {}
     worklist: deque[str] = deque()
-    # name read by a propagating assignment -> that assignment's (targets, lineno)
-    propagators: dict[str, list[tuple[list[ast.expr], int]]] = {}
+    # Each propagating assignment, stored once as (targets, lineno) and keyed by
+    # its index here (a stable id). ``propagators`` maps a name read by an
+    # assignment's value to the ids of the assignments that read it.
+    propagating: list[tuple[list[ast.expr], int]] = []
+    propagators: dict[str, list[int]] = {}
 
     for ast_node in ast.walk(tree):
         if check_runtime is not None:
@@ -519,17 +527,27 @@ def _collect_tainted(
             # Direct source: seed taint for this assignment's targets.
             worklist.extend(_mark_targets(ast_node.targets, tainted, src_name, ast_node.lineno))
         else:
-            # Propagating assignment: index it by each name its value reads, so
-            # it can be tainted later if/when one of those names is tainted.
+            # Propagating assignment: record it once under a stable id and index
+            # that id by each name its value reads, so it can fire later if/when
+            # one of those names is tainted.
+            assignment_id = len(propagating)
+            propagating.append((ast_node.targets, ast_node.lineno))
             for ref in _referenced_names(ast_node.value):
-                propagators.setdefault(ref, []).append((ast_node.targets, ast_node.lineno))
+                propagators.setdefault(ref, []).append(assignment_id)
 
+    fired: set[int] = set()
     while worklist:
         if check_runtime is not None:
             check_runtime()
         name = worklist.popleft()
         src_call = tainted[name].source_call
-        for targets, lineno in propagators.get(name, ()):
+        for assignment_id in propagators.get(name, ()):
+            if assignment_id in fired:
+                # Already propagated once: its targets are all tainted, so
+                # firing again marks nothing new. Skip to stay linear.
+                continue
+            fired.add(assignment_id)
+            targets, lineno = propagating[assignment_id]
             worklist.extend(_mark_targets(targets, tainted, src_call, lineno))
 
     return tainted
