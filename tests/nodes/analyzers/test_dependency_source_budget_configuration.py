@@ -51,7 +51,7 @@ def test_invalid_value_keeps_the_default_and_warns(caplog: pytest.LogCaptureFixt
         resolved = _max_analysis_seconds_from_environment("not-a-number")
 
     assert resolved == DEFAULT_MAX_ANALYSIS_SECONDS
-    assert "SKILLSPECTOR_MAX_DEPENDENCY_ANALYSIS_SECONDS" in caplog.text
+    assert "SKILLSPECTOR_MAX_DEPENDENCY_SOURCE_ANALYSIS_SECONDS" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -61,7 +61,7 @@ def test_invalid_value_keeps_the_default_and_warns(caplog: pytest.LogCaptureFixt
 def test_module_ceiling_matches_the_environment(value: str | None, expected: float) -> None:
     """Import-time resolution is checked in a fresh process like static YARA bounds."""
     env = os.environ.copy()
-    name = "SKILLSPECTOR_MAX_DEPENDENCY_ANALYSIS_SECONDS"
+    name = "SKILLSPECTOR_MAX_DEPENDENCY_SOURCE_ANALYSIS_SECONDS"
     env.pop(name, None)
     if value is not None:
         env[name] = value

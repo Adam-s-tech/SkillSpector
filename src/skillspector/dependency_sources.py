@@ -64,14 +64,14 @@ def _max_analysis_seconds_from_environment(value: str | None) -> float:
         seconds = float(value)
     except ValueError:
         logger.warning(
-            "SKILLSPECTOR_MAX_DEPENDENCY_ANALYSIS_SECONDS=%r is not numeric, using default %.1fs",
+            "SKILLSPECTOR_MAX_DEPENDENCY_SOURCE_ANALYSIS_SECONDS=%r is not numeric, using default %.1fs",
             value,
             DEFAULT_MAX_ANALYSIS_SECONDS,
         )
         return DEFAULT_MAX_ANALYSIS_SECONDS
     if not math.isfinite(seconds) or seconds <= 0:
         logger.warning(
-            "SKILLSPECTOR_MAX_DEPENDENCY_ANALYSIS_SECONDS=%r must be finite and positive, "
+            "SKILLSPECTOR_MAX_DEPENDENCY_SOURCE_ANALYSIS_SECONDS=%r must be finite and positive, "
             "using default %.1fs",
             value,
             DEFAULT_MAX_ANALYSIS_SECONDS,
@@ -81,7 +81,7 @@ def _max_analysis_seconds_from_environment(value: str | None) -> float:
 
 
 MAX_ANALYSIS_SECONDS = _max_analysis_seconds_from_environment(
-    os.environ.get("SKILLSPECTOR_MAX_DEPENDENCY_ANALYSIS_SECONDS")
+    os.environ.get("SKILLSPECTOR_MAX_DEPENDENCY_SOURCE_ANALYSIS_SECONDS")
 )
 
 _CANONICAL_DESTINATIONS: dict[str, frozenset[str]] = {

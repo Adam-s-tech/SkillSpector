@@ -295,7 +295,7 @@ infinite, or NaN values log a warning and retain the 300-second default.
 ## Configuring the dependency-source deadline
 
 Dependency-source redirection analysis allows up to 5 seconds by default. Set
-`SKILLSPECTOR_MAX_DEPENDENCY_ANALYSIS_SECONDS` to a positive finite number of
+`SKILLSPECTOR_MAX_DEPENDENCY_SOURCE_ANALYSIS_SECONDS` to a positive finite number of
 seconds to change that allowance. Invalid, zero, negative, infinite, or NaN
 values log a warning and retain the 5-second default.
 
