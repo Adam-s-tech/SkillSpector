@@ -156,7 +156,10 @@ _SC2_ATTACHED_EXECUTOR = re.compile(
     r"(?:\||&&)\s*(?:sudo\s+)?(?:bash|sh|python3?|node|ruby|perl)",
     re.IGNORECASE,
 )
-_SC2_FENCE_LINE = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})[^\r\n]*", re.MULTILINE)
+_SC2_FENCE_LINE = re.compile(
+    rf"(?:\A|{LOGICAL_LINE_BREAK.pattern})[ \t]*(?P<marker>`{{3,}}|~{{3,}})"
+    r"[^\r\n\v\f\x1c-\x1e\x85\u2028\u2029]*"
+)
 _SC2_COMPOUND_TOKEN = re.compile(
     r"(?P<quoted>\"(?:\\.|[^\"\\])*\"|'[^']*')"
     r"|(?P<escaped>\\[\s\S])"
@@ -1763,6 +1766,12 @@ def _sc2_shell_command_ranges(content: str, file_type: str) -> tuple[tuple[int, 
         if file_type in {"markdown", "text"}
         else content
     )
+    if file_type in {"markdown", "text"}:
+        # Documentation follows the scanner's logical-line contract. Keep
+        # every source offset while giving the shell parser a consistent view.
+        shell_text = LOGICAL_LINE_BREAK.sub(
+            lambda line_break: "\n" + " " * (len(line_break.group(0)) - 1), shell_text
+        )
     fence_ends = tuple(
         fence.end()
         for fence in _SC2_FENCE_LINE.finditer(content)
@@ -1785,16 +1794,18 @@ def _sc2_shell_command_ranges(content: str, file_type: str) -> tuple[tuple[int, 
             # not prove that the fetch and outer executor are disconnected.
             ranges.append((fetch.start(), None))
             break
-        if _sc2_has_unproved_compound_context(content, fetch.start(), fence_ends):
+        if _sc2_has_unproved_compound_context(shell_text, fetch.start(), fence_ends):
             ranges.append((fetch.start(), None))
             break
-        _, command_end, limited = _bounded_shell_tokens(content, fetch.start(), fetch.start() + 4)
+        _, command_end, limited = _bounded_shell_tokens(
+            shell_text, fetch.start(), fetch.start() + 4
+        )
         if (
             limited
             or content[command_end : command_end + 1] in {"'", '"', "`", ")"}
             # CMD caret continuation is outside the Bourne parser's proof.
             or re.search(r"\^[ \t]*\r?$", content[fetch.start() : command_end]) is not None
-            or _sc2_has_unproved_compound_context(content, command_end, fence_ends)
+            or _sc2_has_unproved_compound_context(shell_text, command_end, fence_ends)
         ):
             # Preserve legacy nonoverlapping matching on uncertain syntax,
             # rather than repeatedly parsing overlapping suffixes.
