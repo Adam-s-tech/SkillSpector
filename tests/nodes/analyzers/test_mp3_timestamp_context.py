@@ -161,6 +161,8 @@ def test_surrounding_directives_and_incomplete_context_keep_finding(content):
         "Commands for execution:\nTimestamp formatting example.",
         "Directions:\nTimestamp formatting example.",
         "Actions:\nTimestamp formatting example.",
+        "Here are a few actions:\nTimestamp formatting example.",
+        "Here are some important operations:\nTimestamp formatting example.",
         "Steps:\nTimestamp formatting example.",
         "### Commands:\nTimestamp formatting example.",
         "> ### Commands:\n> Timestamp formatting example.",

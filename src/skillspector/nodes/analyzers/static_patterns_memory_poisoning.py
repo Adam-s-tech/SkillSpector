@@ -221,7 +221,7 @@ _TIMESTAMP_OWNERSHIP_PATTERN = (
 )
 _TIMESTAMP_OWNERSHIP_REFERENCE = re.compile(_TIMESTAMP_OWNERSHIP_PATTERN, re.IGNORECASE)
 _TIMESTAMP_AUTHORITY_HEADING = re.compile(
-    r"(?:[A-Za-z]+[ \t]+){0,3}"
+    r"(?:[A-Za-z]+[ \t]+)*"
     r"(?:commands?|instructions?|directions?|directives?|orders?|actions?|operations?|steps?|tasks?)"
     r"(?=[ \t:]|$)[^:\r\n]{0,80}:[ \t]*",
     re.IGNORECASE,
