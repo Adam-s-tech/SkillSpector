@@ -47,6 +47,22 @@ def remove_temp_tree(path: str | Path) -> None:
     shutil.rmtree(path, onexc=_retry_writable)
 
 
+SCAN_TEMP_DIR_PREFIX = "skillspector_"
+
+
+def _is_scan_temp_dir(value: object) -> bool:
+    """Return whether ``value`` names an existing, non-symlink scan temp directory."""
+    if not isinstance(value, str) or not value:
+        return False
+    path = Path(value)
+    if not path.name.startswith(SCAN_TEMP_DIR_PREFIX):
+        return False
+    try:
+        return path.is_dir() and not path.is_symlink() and not os.path.isjunction(path)
+    except OSError:
+        return False
+
+
 class TempDirTracker(BaseCallbackHandler):
     """Remember the temp directory a graph run materializes, as soon as it exists.
 
@@ -63,10 +79,17 @@ class TempDirTracker(BaseCallbackHandler):
         self.temp_dir: str | None = None
 
     def on_chain_end(self, outputs: Any, **kwargs: Any) -> None:
-        """Record ``temp_dir_for_cleanup`` from a node or graph output."""
+        """Record ``temp_dir_for_cleanup`` from a node or graph output.
+
+        The recorded path is later removed recursively, so only a value that
+        looks like a scan temp dir is accepted: an existing directory, not a
+        symlink, whose name carries the ``skillspector_`` prefix that
+        ``InputHandler`` gives ``mkdtemp``. Anything else is ignored and never
+        replaces a path already recorded.
+        """
         if isinstance(outputs, Mapping):
             temp_dir = outputs.get("temp_dir_for_cleanup")
-            if isinstance(temp_dir, str) and temp_dir:
+            if _is_scan_temp_dir(temp_dir):
                 self.temp_dir = temp_dir
 
     def remove(self) -> None:

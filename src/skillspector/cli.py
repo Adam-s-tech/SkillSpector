@@ -2406,21 +2406,29 @@ def _scan_skill(
         active_visited.add(transitive.canonicalize_source_identity(input_path))
     except ValueError:
         pass
-    return _scan_transitive(
-        initial_result=result,
-        format=format,
-        no_llm=no_llm,
-        max_depth=transitive_depth,
-        transitive_allow_prefix=transitive_allow_prefix,
-        transitive_deny_prefix=transitive_deny_prefix,
-        baseline=baseline,
-        show_suppressed=show_suppressed,
-        visited=active_visited,
-        scan_cache=transitive_cache,
-        yara_dir=yara_dir,
-        traversal=transitive_traversal,
-        source_local_only=source_local_only,
-    )
+    # The root graph has returned, so its tracker no longer guards the root's
+    # temp dir. If the transitive phase is interrupted or raises, nothing is
+    # returned for the caller's cleanup_result, so remove it here. On success
+    # the merged result carries the same temp_dir_for_cleanup for the caller.
+    try:
+        return _scan_transitive(
+            initial_result=result,
+            format=format,
+            no_llm=no_llm,
+            max_depth=transitive_depth,
+            transitive_allow_prefix=transitive_allow_prefix,
+            transitive_deny_prefix=transitive_deny_prefix,
+            baseline=baseline,
+            show_suppressed=show_suppressed,
+            visited=active_visited,
+            scan_cache=transitive_cache,
+            yara_dir=yara_dir,
+            traversal=transitive_traversal,
+            source_local_only=source_local_only,
+        )
+    except BaseException:
+        cleanup_result(result)
+        raise
 
 
 def _multi_skill_public_record_count(result: dict[str, object]) -> int:
