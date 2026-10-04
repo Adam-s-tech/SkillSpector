@@ -1554,8 +1554,8 @@ class TestRunStaticPatternsPrivilegeEscalationPE5:
         pe5 = next(f for f in findings if f.rule_id == "PE5")
         assert {"contextual-triage", "likely-benign-context"} <= set(pe5.tags)
 
-    def test_pe5_reference_material_is_downweighted_not_suppressed(self):
-        """A vendor manifest under references/ keeps the PE5 finding at halved confidence."""
+    def test_pe5_reference_material_is_tagged_with_confidence_unchanged(self):
+        """A manifest under references/ is tagged for triage but keeps full PE5 confidence."""
         state = {
             "components": ["references/vendor.md"],
             "file_cache": {"references/vendor.md": _VENDOR_PRIVILEGED_MANIFEST},
@@ -1564,11 +1564,11 @@ class TestRunStaticPatternsPrivilegeEscalationPE5:
         pe5 = [f for f in findings if f.rule_id == "PE5"]
         assert len(pe5) == 1
         assert pe5[0].severity == "HIGH"
-        assert pe5[0].confidence == pytest.approx(0.4)
+        assert pe5[0].confidence == pytest.approx(0.8)
         assert {"contextual-triage", "likely-benign-context"} <= set(pe5[0].tags)
 
     def test_pe5_skill_md_instruction_keeps_full_confidence(self):
-        """The same manifest in SKILL.md is an instruction and is not downweighted."""
+        """The same manifest in SKILL.md is an instruction and is not tagged as reference."""
         state = {
             "components": ["SKILL.md"],
             "file_cache": {"SKILL.md": _VENDOR_PRIVILEGED_MANIFEST},
@@ -1589,9 +1589,22 @@ class TestRunStaticPatternsPrivilegeEscalationPE5:
         pe5 = [f for f in findings if f.rule_id == "PE5"]
         assert len(pe5) == 1
         assert pe5[0].confidence == pytest.approx(0.8)
+        assert "likely-benign-context" not in pe5[0].tags
 
-    def test_pe5_reference_script_keeps_full_confidence(self):
-        """Only markdown/text reference material is downweighted, never an executable script."""
+    def test_pe5_nested_references_dir_is_not_reference_material(self):
+        """Only the top-level references/ directory counts, not a nested one."""
+        state = {
+            "components": ["docs/references/vendor.md"],
+            "file_cache": {"docs/references/vendor.md": _VENDOR_PRIVILEGED_MANIFEST},
+        }
+        findings = static_runner.run_static_patterns(state, [privilege_escalation_module])
+        pe5 = [f for f in findings if f.rule_id == "PE5"]
+        assert len(pe5) == 1
+        assert pe5[0].confidence == pytest.approx(0.8)
+        assert "likely-benign-context" not in pe5[0].tags
+
+    def test_pe5_reference_script_is_not_tagged(self):
+        """Only markdown/text reference material is tagged, never an executable script."""
         state = {
             "components": ["references/setup.sh"],
             "file_cache": {
@@ -1602,6 +1615,7 @@ class TestRunStaticPatternsPrivilegeEscalationPE5:
         pe5 = [f for f in findings if f.rule_id == "PE5"]
         assert len(pe5) == 1
         assert pe5[0].confidence == pytest.approx(0.8)
+        assert "likely-benign-context" not in pe5[0].tags
 
 
 class TestRunStaticPatternsSSRF:

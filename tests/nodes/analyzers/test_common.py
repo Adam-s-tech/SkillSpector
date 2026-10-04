@@ -58,11 +58,14 @@ def test_source_location_index_reuses_logical_line_offsets() -> None:
     ("file_path", "file_type", "expected"),
     [
         ("references/vendor.md", "markdown", True),
-        ("reference/vendor.md", "markdown", True),
-        ("docs/references/deep/vendor.md", "markdown", True),
+        ("references/k8s/vendor.md", "markdown", True),
         (r"references\vendor.md", "markdown", True),
-        ("REFERENCES/Vendor.MD", "markdown", True),
         ("references/notes.txt", "text", True),
+        ("reference/vendor.md", "markdown", False),
+        ("docs/references/x.md", "markdown", False),
+        ("docs/references/deep/vendor.md", "markdown", False),
+        ("scripts/reference/notes.md", "markdown", False),
+        ("REFERENCES/Vendor.MD", "markdown", False),
         ("references/SKILL.md", "markdown", False),
         ("SKILL.md", "markdown", False),
         ("docs/vendor.md", "markdown", False),
@@ -71,7 +74,7 @@ def test_source_location_index_reuses_logical_line_offsets() -> None:
         ("my-references-guide.md", "markdown", False),
     ],
 )
-def test_is_reference_material_recognizes_describing_documentation(
+def test_is_reference_material_matches_top_level_references_only(
     file_path: str, file_type: str, expected: bool
 ) -> None:
     assert is_reference_material(file_path, file_type) is expected

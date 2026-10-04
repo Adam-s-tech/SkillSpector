@@ -82,30 +82,26 @@ def is_code_example(context: str, *, path: str = "") -> bool:
     return any(ind in ctx_lower for ind in _CODE_EXAMPLE_INDICATORS)
 
 
-# Agent Skills keep on-demand reference material under ``references/``. A
-# vendor manifest reproduced there describes a third-party requirement; the same
-# text in SKILL.md or a script instructs the agent to carry it out.
-_REFERENCE_MATERIAL_DIRS = frozenset({"reference", "references"})
-
-# Reference material is de-emphasised, never suppressed: a skill author controls
-# its own layout, so a malicious instruction parked under ``references/`` must
-# still surface as a finding rather than disappear from the report.
-REFERENCE_MATERIAL_CONFIDENCE_SCALE = 0.5
+# Agent Skills keep on-demand reference material in a ``references/`` directory
+# directly under the skill root. Analyzers receive component paths relative to
+# that root, so only a leading ``references/`` segment qualifies.
+_REFERENCE_MATERIAL_DIR = "references"
 
 
 def is_reference_material(file_path: str, file_type: str) -> bool:
-    """Return True when *file_path* is skill documentation that describes rather than instructs.
+    """Return True when *file_path* is markdown/text under the skill's top-level ``references/``.
 
-    SKILL.md is never reference material, wherever it sits: it is the agent's
-    primary instruction file, mirroring the exemption in :func:`is_code_example`.
+    This is a layout fact used for contextual triage only. The agent loads these
+    files as instructions when SKILL.md points to them, so callers tag findings
+    here but never lower their confidence. SKILL.md is never reference material,
+    mirroring the exemption in :func:`is_code_example`.
     """
     if file_type not in {"markdown", "text"}:
         return False
-    normalized = file_path.replace("\\", "/").lower()
-    segments = normalized.split("/")
-    if segments[-1] == "skill.md":
+    segments = file_path.replace("\\", "/").split("/")
+    if segments[-1].lower() == "skill.md":
         return False
-    return any(segment in _REFERENCE_MATERIAL_DIRS for segment in segments[:-1])
+    return len(segments) > 1 and segments[0] == _REFERENCE_MATERIAL_DIR
 
 
 def get_line_number(content: str, offset: int) -> int:

@@ -42,7 +42,6 @@ from .common import (
     LINE_BREAK_CHARS,
     MARKDOWN_FENCE_CLOSE,
     MARKDOWN_FENCE_OPEN,
-    REFERENCE_MATERIAL_CONFIDENCE_SCALE,
     get_context,
     get_line_number,
     is_reference_material,
@@ -3576,9 +3575,9 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
                 )
             )
     # TM4: privileged K8s workload. Example filtering is delegated to the runner,
-    # which keeps reference material because it is part of the skill. The same
-    # manifest is a vendor requirement under `references/` and an instruction in
-    # SKILL.md, so the describing copy is de-emphasised here rather than dropped.
+    # which keeps reference material because it is part of the skill. Findings in
+    # top-level `references/` are tagged for triage only; the agent reads those
+    # files as instructions, so confidence and score are left unchanged.
     reference_material = is_reference_material(file_path, file_type)
     tm4_tags = [*tag, "contextual-triage", "likely-benign-context"] if reference_material else tag
     for pattern, confidence in TM4_PATTERNS:
@@ -3590,11 +3589,7 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
                     message="Privileged Kubernetes Workload",
                     severity=Severity.HIGH,
                     location=loc(line_num),
-                    confidence=(
-                        confidence * REFERENCE_MATERIAL_CONFIDENCE_SCALE
-                        if reference_material
-                        else confidence
-                    ),
+                    confidence=confidence,
                     tags=tm4_tags,
                     context=ctx(match.start()),
                     matched_text=match.group(0)[:200],
