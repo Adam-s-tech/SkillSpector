@@ -183,6 +183,7 @@ def test_nested_evidence_preserves_scalar_types_and_original_finding() -> None:
         "safe` | LOW |\r\n## Issues (0)\rNo security issues detected.\n<!--",
         "` `` ``` <script>alert(1)</script> [safe](https://example.invalid)",
         "\\| **safe** &lt;!--",
+        "\x1b[2J\x00\u202eLOW\u202c\x9b\u2066safe\u2069",
     ],
 )
 @pytest.mark.parametrize(
@@ -281,8 +282,10 @@ def test_markdown_report_contains_untrusted_fields(payload: str, field: str) -> 
         setattr(finding, field, payload)
     original = deepcopy(arguments)
 
-    tokens = parser.parse(_format_markdown(**arguments))
+    rendered = _format_markdown(**arguments)
+    tokens = parser.parse(rendered)
 
+    assert all(character.isprintable() or character in "\n\t" for character in rendered)
     assert [token.type for token in tokens] == original_blocks
     for token in tokens:
         assert token.type not in {"html_block", "fence", "code_block"}

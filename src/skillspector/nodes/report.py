@@ -1405,15 +1405,21 @@ def _format_json(
     return json.dumps(data, indent=2)
 
 
+def _markdown_plain_text(value: object) -> str:
+    """Remove display controls and keep a Markdown field on one line."""
+    text = _clean_text(str(value)) or ""
+    return " ".join("".join(c for c in text if c.isprintable() or c.isspace()).splitlines())
+
+
 def _markdown_cell(value: object) -> str:
     """Render dynamic prose as literal text on one Markdown line."""
-    text = escape_html(" ".join((_clean_text(str(value)) or "").splitlines()), quote=False)
+    text = escape_html(_markdown_plain_text(value), quote=False)
     return re.sub(r"([\\`*_{}\[\]()#+.!|>-])", r"\\\1", text)
 
 
 def _markdown_code(value: object, *, table_cell: bool = False) -> str:
     """Keep literal values inside their code spans and table cells."""
-    text = " ".join((_clean_text(str(value)) or "").splitlines())
+    text = _markdown_plain_text(value)
     if table_cell:
         text = text.replace("|", "\\|")
     delimiter = "`" * (max((len(run) for run in re.findall(r"`+", text)), default=0) + 1)
