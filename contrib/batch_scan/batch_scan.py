@@ -23,7 +23,7 @@ categories that have no semantic-analyzer equivalent.
 Concurrency model
 -----------------
 Each skill runs the full ``graph.invoke(state)`` pipeline in a dedicated
-thread via :class:`~concurrent.futures.ThreadPoolExecutor`.  The number of
+process supervised by a :class:`~concurrent.futures.ThreadPoolExecutor`. The number of
 parallel workers is controlled by ``--workers`` (default 4).  A 90-second
 per-skill timeout prevents stalled workers from blocking the batch.  This
 sits on top of two built-in parallelism layers:
@@ -57,10 +57,22 @@ else:
     _dotenv.load_dotenv(_dotenv.find_dotenv(usecwd=True), override=True)
 
 import argparse
+import json
+import multiprocessing
+import os
+import signal
+import subprocess
 import sys
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
+from contextlib import ExitStack
+from functools import partial
+from multiprocessing.managers import BaseManager
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from uuid import uuid4
 
 from skillspector.logging_config import set_level
 
@@ -75,6 +87,13 @@ from .runner import run_one
 # Progress-print lock — Rich consoles are not thread-safe; serialize output
 # from the main thread via this lock.
 _print_lock = threading.Lock()
+
+
+class _PoolManager(BaseManager):
+    """Keep rate limits shared across independently killable scan processes."""
+
+
+_PoolManager.register("create_pool", create_api_key_pool_from_env)
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +132,73 @@ def _scan_skill(
     )
 
     return entry, error_msg, rel_name
+
+
+def _scan_skill_process(skill_dir: Path, root: Path, result_path: Path, options: dict) -> None:
+    if os.name == "posix":
+        os.setsid()
+    # A killed worker cannot run finally blocks. Its supervisor owns all scratch.
+    tempfile.tempdir = str(result_path.parent)
+    for name in ("TMPDIR", "TEMP", "TMP"):
+        os.environ[name] = str(result_path.parent)
+    from .runner import deepseek_compat, set_api_pool
+
+    if options.get("api_pool") is not None:
+        set_api_pool(options["api_pool"])
+    with deepseek_compat():
+        result = _scan_skill(skill_dir, root, **options)
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+
+def _scan_skill_bounded(
+    skill_dir: Path, root: Path, *, api_pool=None, timeout: float = 90, **options
+) -> tuple[dict[str, object], str | None, str]:
+    """Enforce the wall-clock limit on actual work, including local analysis."""
+    owner = uuid4().hex
+    if api_pool is not None:
+        options["api_pool"] = SimpleNamespace(
+            acquire=partial(api_pool.acquire, owner=owner),
+            try_acquire=partial(api_pool.try_acquire, owner=owner),
+            release=partial(api_pool.release, owner=owner),
+            record_retry_success=api_pool.record_retry_success,
+        )
+    with TemporaryDirectory(prefix="skillspector-batch-") as scratch:
+        result_path = Path(scratch) / "result.json"
+        process = multiprocessing.get_context("spawn").Process(
+            target=_scan_skill_process, args=(skill_dir, root, result_path, options)
+        )
+        try:
+            process.start()
+            process.join(timeout)
+            if process.is_alive():
+                raise TimeoutError(f"Skill scan exceeded {timeout:g}s")
+            if process.exitcode != 0:
+                raise RuntimeError(f"Skill scan worker exited with code {process.exitcode}")
+            entry, error, name = json.loads(result_path.read_text(encoding="utf-8"))
+            return entry, error, name
+        finally:
+            if process.pid is not None:
+                if os.name == "posix":
+                    # Also stop provider/tool children that outlived the worker.
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                elif process.is_alive():
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+                            check=False,
+                        )
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                if process.is_alive():
+                    process.kill()
+                process.join()
+                process.close()
+            if api_pool is not None:
+                api_pool.release_owner(owner)
 
 
 # ---------------------------------------------------------------------------
@@ -247,9 +333,6 @@ def _main_impl() -> None:
 
     # -- API Pool (optional — returns None if single-key) --------------------
     api_pool = create_api_key_pool_from_env()
-    if api_pool:
-        from .runner import set_api_pool
-        set_api_pool(api_pool)
     use_llm = not args.no_llm
 
     # -- Header --------------------------------------------------------------
@@ -280,10 +363,16 @@ def _main_impl() -> None:
 
     total = len(skill_dirs)
 
-    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+    pool_snapshot = None
+    with ExitStack() as cleanup, ThreadPoolExecutor(max_workers=args.workers) as executor:
+        if api_pool is not None:
+            pool_manager = cleanup.enter_context(
+                _PoolManager(ctx=multiprocessing.get_context("spawn"))
+            )
+            api_pool = pool_manager.create_pool()
         future_map = {
             executor.submit(
-                _scan_skill,
+                _scan_skill_bounded,
                 skill_dir,
                 root,
                 use_llm=use_llm,
@@ -298,7 +387,7 @@ def _main_impl() -> None:
             idx = future_map[future]
             rel_name = str(skill_dirs[idx - 1].relative_to(root)) if idx <= len(skill_dirs) else "?"
             try:
-                entry, error_msg, rel_name = future.result(timeout=90)
+                entry, error_msg, rel_name = future.result()
             except TimeoutError:
                 errors += 1
                 with _print_lock:
@@ -306,9 +395,7 @@ def _main_impl() -> None:
                         f"  [{idx}/{total}] [cyan]{display(rel_name)}[/cyan] → "
                         f"[red]TIMEOUT (90s)[/red]"
                     )
-                # Don't retry — the worker thread is still stuck and a
-                # retry would consume another slot.  HTTP-level timeouts
-                # (runner.py Patch 6) prevent most hangs from happening.
+                # The timed-out process has been killed; later skills still run.
                 continue
             except Exception:
                 # Unexpected crash (e.g. asyncio event-loop failure).
@@ -356,6 +443,9 @@ def _main_impl() -> None:
                         f"({n_issues} issue(s))"
                     )
 
+        if api_pool is not None:
+            pool_snapshot = api_pool.snapshot()
+
     # -- Sort results by risk score descending -------------------------------
     results.sort(
         key=lambda x: x.get("risk_assessment", {}).get("score", 0),  # type: ignore[no-any-return]
@@ -363,8 +453,8 @@ def _main_impl() -> None:
     )
 
     # -- API Pool summary (if active) ----------------------------------------
-    if api_pool:
-        snap = api_pool.snapshot()
+    if pool_snapshot:
+        snap = pool_snapshot
         _parts = [
             f"{snap['total_requests_served']} requests served",
         ]
