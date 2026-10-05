@@ -31,7 +31,7 @@ Selection happens via the ``SKILLSPECTOR_PROVIDER`` env var:
     azure_openai      → AzureOpenAIProvider          (Azure OpenAI Service)
     openai_compatible → OpenAICompatibleProvider     (Groq, Together AI, Mistral, etc.)
     claude_cli        → ClaudeCLIProvider            (local ``claude`` binary, no API key)
-    codex_cli         → CodexCLIProvider             (local ``codex`` binary, no API key)
+    codex_cli         → CodexCLIProvider             (registered but disabled: host-file reads)
     gemini_cli        → GeminiCLIProvider            (local ``gemini`` binary, no API key)
     opencode_cli      → OpencodeCLIProvider          (local ``opencode`` binary, no API key)
     antigravity_cli   → AntigravityCLIProvider       (local ``agy`` binary; registered
