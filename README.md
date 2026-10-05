@@ -196,6 +196,38 @@ See the [contrib guide](contrib/batch_scan/docs/) for details.
 > contribute a more universal backend (Ollama, vLLM, or a different provider),
 > PRs are very welcome.
 
+### Comparing MCP Registry snapshots
+
+Start with raw registry payload captures (`registry-before.json` and
+`registry-after.json`). Save a scan report as `previous.json`, then compare a
+later scan against that generated local report:
+
+```bash
+skillspector scan registry-before.json --mcp-registry --format json --output previous.json
+skillspector scan registry-after.json --mcp-registry --format json \
+  --mcp-registry-compare previous.json --output compared.json
+```
+
+The optional `comparison` object lists added and removed server identities,
+changed normalized fields with their previous and current values, and an
+`unchanged_count`. Identity is the server name and version, so a new version
+appears as an addition and the old version as a removal if it is absent from the
+new scan. Acquisition source and scan timestamp are excluded from comparison.
+`unmodeled_changes` lists same-identity records whose raw-record hash changed
+while normalized fields match; these are not counted as unchanged. This can
+indicate a change to fields outside the snapshot model, or array reordering in
+the raw record. Package and remote ordering alone is not a normalized field change.
+Entries in `changed` may also contain changes outside the snapshot model; inspect
+the raw record to see those changes.
+Compare reports with the same selection scope: a server absent from the current
+input is reported as removed, which does not prove it was removed from a registry.
+
+The comparison file must be a local report produced by this registry mode with
+valid normalized snapshots. Malformed, oversized or duplicate server identities
+are rejected. This option requires `--mcp-registry` and is separate from the
+finding-suppression `--baseline`: it never suppresses findings or changes risk
+scores, and it does not fetch or execute listed server endpoints.
+
 ### Suppressing False Positives (baseline)
 
 Suppress known/accepted findings so the risk score reflects only un-triaged
@@ -674,6 +706,7 @@ Issues (2)
 | `SKILLSPECTOR_MODEL` | Override the active provider model. For hosted providers, this replaces the bundled default from the LLM Analysis table. For CLI providers, this is forwarded as `--model` instead of using the local runtime fallback. | Optional |
 | `SKILLSPECTOR_MODEL_REGISTRY` | Override the bundled per-provider YAML registry (`src/skillspector/providers/<provider>/model_registry.yaml`) with a custom path. | Optional |
 | `SKILLSPECTOR_LOG_LEVEL` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `WARNING`). | Optional |
+| `SKILLSPECTOR_MAX_DEPENDENCY_SOURCE_ANALYSIS_SECONDS` | Ceiling for the dependency-source analysis pass, in seconds. Defaults to `5.0`, which is the historical value. Raise it on slow or heavily loaded machines so the same unchanged tree does not come back partially inspected, which would set `safe_to_install` to false and record `runtime_limit`. The remaining aggregate workflow time (`SKILLSPECTOR_MAX_WORKFLOW_SECONDS`, 600 seconds by default) still caps the effective value; values above that remaining time have no effect. Invalid, zero, negative, infinite, and NaN values keep the 5-second default. The setting is resolved when the module is imported, so a new process is required after changing it. See [analysis resource bounds](docs/ANALYSIS_RESOURCE_BOUNDS.md#configuring-the-dependency-source-deadline). | Optional |
 
 > **CLI providers** (`claude_cli`, `codex_cli`, `gemini_cli`, `opencode_cli`): No API key is needed. Authentication is managed entirely by the agent CLI's own login session. SkillSpector never reads or forwards API keys when these providers are active. The subprocess is run with capabilities restricted, and untrusted skill content is delivered only via stdin.
 >

@@ -273,7 +273,7 @@ def _main_impl() -> None:
     except ImportError:
         Console = None  # type: ignore[assignment]  # noqa: N806
 
-    c = Console() if Console is not None else None
+    c = Console(emoji=False) if Console is not None else None
 
     def display(value: object) -> str:
         text = _terminal_text(value)
