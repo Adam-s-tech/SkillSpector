@@ -28,6 +28,7 @@ installed.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from ipaddress import ip_address
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -280,7 +281,19 @@ def build_server(name: str = "skillspector", *, allow_local_targets: bool = Fals
 
 
 def run(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8000) -> None:
-    """Run the MCP server over ``stdio`` (local agents) or ``http`` (remote/A2A)."""
+    """Run the MCP server over ``stdio`` or loopback-only ``http``."""
+    if transport == "http":
+        # Never resolve caller-selected names or expose this unauthenticated server.
+        host = "127.0.0.1" if host.lower() == "localhost" else host
+        try:
+            loopback = ip_address(host).is_loopback
+        except ValueError:
+            loopback = False
+        if not loopback:
+            raise ValueError(
+                "HTTP MCP has no authentication and must bind to a loopback IP "
+                "(127.0.0.1 or ::1). Use an authenticating reverse proxy for remote access."
+            )
     server = build_server(allow_local_targets=transport == "stdio")
     if transport == "stdio":
         server.run(transport="stdio")

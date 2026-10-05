@@ -384,7 +384,7 @@ uv tool install --force 'skillspector[mcp] @ git+https://github.com/NVIDIA/skill
 # FastMCP stdio transport for local CLI agents
 skillspector mcp
 
-# streamable HTTP/SSE transport for remote / A2A callers
+# Streamable HTTP transport on a local loopback interface
 skillspector mcp --transport http --host 127.0.0.1 --port 8000
 ```
 
@@ -409,11 +409,12 @@ claude mcp add skillspector -- skillspector mcp
 > **Security — HTTP transport trust model**
 >
 > The HTTP transport ships **without authentication**. Any caller that can
-> reach the port can invoke `scan_skill`. Over stdio or `127.0.0.1` this is
-> the same trust boundary as the CLI. If you bind to a routable interface:
+> reach the port can invoke `scan_skill`. HTTP bindings are restricted to
+> loopback IPs (`127.0.0.1` or `::1`); `localhost` binds to `127.0.0.1` without
+> DNS resolution. Wildcard, routable and other hostname bindings are rejected.
 >
-> - Sit the server behind an authenticating reverse proxy (e.g. nginx + mTLS)
->   before exposing it externally.
+> - For remote access, put an authenticating reverse proxy (e.g. nginx + mTLS)
+>   in front of the loopback listener.
 > - Local paths and `file://` URLs are **automatically rejected** over HTTP to
 >   prevent unauthenticated callers from reading arbitrary host files. Only
 >   remote Git and `.zip` URLs are accepted.
