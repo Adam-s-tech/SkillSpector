@@ -660,3 +660,86 @@ def test_scp_ssrf_gate_fires() -> None:
     with patch("skillspector.input_handler._is_private_ip", return_value=True):
         with pytest.raises(ValueError, match="private/internal IP"):
             InputHandler()._validate_url_host("git@github.com:org/repo.git", ALLOWED_GIT_HOSTS)
+
+
+@pytest.mark.parametrize("operation", ["_clone_git", "_list_remote_refs"])
+def test_anonymous_git_drops_ambient_auth_and_config(
+    operation: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    hostile = {
+        "HOME": str(tmp_path),
+        "SSH_AUTH_SOCK": "/synthetic/agent",
+        "GIT_ASKPASS": "/synthetic/askpass",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraHeader",
+        "GIT_CONFIG_VALUE_0": "Authorization: synthetic-secret",
+        "GIT_CONFIG_GLOBAL": str(tmp_path / "credentials.config"),
+        "GITHUB_TOKEN": "synthetic-token",
+        "CURL_HOME": str(tmp_path),
+        "SSLKEYLOGFILE": str(tmp_path / "tls-keys"),
+    }
+    for key, value in hostile.items():
+        monkeypatch.setenv(key, value)
+    handler = InputHandler(allow_git_credentials=False)
+    calls: list[tuple[list[str], dict]] = []
+
+    def fake_git(command: list[str], **kwargs: object) -> MagicMock:
+        calls.append((command, kwargs))
+        if "clone" in command:
+            Path(command[-1]).mkdir(parents=True)
+        process = MagicMock()
+        process.poll.return_value = 0
+        process.wait.return_value = 0
+        process.returncode = 0
+        process.stdout = b"abc\trefs/heads/main\n"
+        return process
+
+    try:
+        with (
+            patch.object(handler, "_validate_url_host", return_value="github.com"),
+            patch("skillspector.input_handler.subprocess.Popen", side_effect=fake_git),
+            patch("skillspector.input_handler.subprocess.run", side_effect=fake_git),
+        ):
+            getattr(handler, operation)("https://github.com/org/public.git")
+        assert len(calls) == 1
+        command, kwargs = calls[0]
+        env = kwargs["env"]
+        isolated_home = handler.temp_dir_for_cleanup() / "git-home"
+        assert command[:3] == ["git", "-C", str(isolated_home)]
+        assert "credential.helper=" in command
+        assert "core.askPass=" in command
+        assert "http.extraHeader=" in command
+        assert "http.followRedirects=false" in command
+        assert env["HOME"] == env["USERPROFILE"] == str(isolated_home)
+        assert env["GIT_CONFIG_GLOBAL"] == env["GIT_CONFIG_SYSTEM"] == os.devnull
+        assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+        assert env["GIT_ALLOW_PROTOCOL"] == "https"
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert list(isolated_home.iterdir()) == []
+        for key in hostile.keys() - {"HOME", "GIT_CONFIG_GLOBAL"}:
+            assert key not in env
+        assert os.environ["HOME"] == str(tmp_path)
+    finally:
+        handler.cleanup()
+
+
+@pytest.mark.parametrize("operation", ["_clone_git", "_list_remote_refs"])
+@pytest.mark.parametrize(
+    "target",
+    [
+        "git@github.com:org/private.git",
+        "ssh://git@github.com/org/private.git",
+        "https://user:password@github.com/org/private.git",
+    ],
+)
+def test_anonymous_git_rejects_auth_targets_before_start(operation: str, target: str) -> None:
+    handler = InputHandler(allow_git_credentials=False)
+    with (
+        patch("skillspector.input_handler.subprocess.Popen") as popen,
+        patch("skillspector.input_handler.subprocess.run") as run,
+    ):
+        with pytest.raises(ValueError, match="unauthenticated HTTPS"):
+            getattr(handler, operation)(target)
+    popen.assert_not_called()
+    run.assert_not_called()
+    assert handler.temp_dir_for_cleanup() is None
