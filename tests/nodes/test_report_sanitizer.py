@@ -295,7 +295,8 @@ def test_markdown_report_contains_untrusted_fields(payload: str, field: str) -> 
     for token in tokens:
         assert token.type not in {"html_block", "fence", "code_block"}
         assert not any(
-            child.type in {"html_inline", "link_open", "image", "s_open"} for child in token.children or []
+            child.type in {"html_inline", "link_open", "image", "s_open"}
+            for child in token.children or []
         )
     assert arguments == original
 
