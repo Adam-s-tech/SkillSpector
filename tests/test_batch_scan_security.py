@@ -317,11 +317,15 @@ def test_worker_timeout_kills_scan_and_releases_pool_capacity(tmp_path, monkeypa
             child_stat = Path(f"/proc/{child_pid}/stat")
             assert not child_stat.exists() or child_stat.read_text().split()[2] == "Z"
         monkeypatch.setattr(batch_scan, "_scan_skill_process", _successful_scan_process)
+        group_signals = []
+        if os.name == "posix":
+            monkeypatch.setattr(batch_scan.os, "killpg", lambda *args: group_signals.append(args))
         entry, error, name = batch_scan._scan_skill_bounded(
             tmp_path, tmp_path, api_pool=pool, timeout=10
         )
         assert entry["skill"]["name"] == name == tmp_path.name
         assert error is None
+        assert group_signals == []  # Never signal a PID after its worker was reaped.
 
 
 def test_process_pool_shares_slots_and_cancels_waiting_owner(monkeypatch):

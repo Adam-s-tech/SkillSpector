@@ -87,6 +87,8 @@ from .runner import run_one
 # Progress-print lock — Rich consoles are not thread-safe; serialize output
 # from the main thread via this lock.
 _print_lock = threading.Lock()
+# Process.start() reaps finished siblings; serialize it with live-worker cleanup.
+_process_lock = threading.Lock()
 
 
 class _PoolManager(BaseManager):
@@ -168,7 +170,8 @@ def _scan_skill_bounded(
             target=_scan_skill_process, args=(skill_dir, root, result_path, options)
         )
         try:
-            process.start()
+            with _process_lock:
+                process.start()
             process.join(timeout)
             if process.is_alive():
                 raise TimeoutError(f"Skill scan exceeded {timeout:g}s")
@@ -177,26 +180,29 @@ def _scan_skill_bounded(
             entry, error, name = json.loads(result_path.read_text(encoding="utf-8"))
             return entry, error, name
         finally:
-            if process.pid is not None:
-                if os.name == "posix":
-                    # Also stop provider/tool children that outlived the worker.
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                elif process.is_alive():
-                    try:
-                        subprocess.run(
-                            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
-                            check=False,
-                        )
-                    except (OSError, subprocess.TimeoutExpired):
-                        pass
-                if process.is_alive():
-                    process.kill()
-                process.join()
-                process.close()
+            with _process_lock:
+                if process.pid is not None:
+                    # Only signal a live, unreaped worker while sibling starts
+                    # cannot recycle its PID. Providers own normal-exit cleanup.
+                    if process.exitcode is None:
+                        if os.name == "posix":
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                        else:
+                            try:
+                                subprocess.run(
+                                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=5, check=False,
+                                )
+                            except (OSError, subprocess.TimeoutExpired):
+                                pass
+                        if process.is_alive():
+                            process.kill()
+                    process.join()
+                    process.close()
             if api_pool is not None:
                 api_pool.release_owner(owner)
 
