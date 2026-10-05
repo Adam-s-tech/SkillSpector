@@ -337,7 +337,9 @@ class TestScrubEnv:
             "HTTPS_PROXY": "http://proxy.example:8080",
         }
         with (
-            patch.dict(_agent_cli.os.environ, runtime | {"GH_TOKEN": "synthetic-secret"}, clear=True),
+            patch.dict(
+                _agent_cli.os.environ, runtime | {"GH_TOKEN": "synthetic-secret"}, clear=True
+            ),
             patch.object(_agent_cli.subprocess, "run") as run,
         ):
             run.return_value = subprocess.CompletedProcess(
