@@ -375,15 +375,21 @@ def _format_json(results: list[dict[str, object]]) -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 
+def _markdown_plain_text(value: object) -> str:
+    """Remove display controls and keep a Markdown field on one line."""
+    text = "".join(c for c in str(value) if c.isprintable() or c.isspace())
+    return " ".join(text.splitlines())
+
+
 def _markdown_text(value: object) -> str:
     """Keep scan-derived prose within its own Markdown line."""
-    text = escape_html(" ".join(str(value).splitlines()), quote=False)
+    text = escape_html(_markdown_plain_text(value), quote=False)
     return re.sub(r"([\\`*_{}\[\]()#+.!|>-])", r"\\\1", text)
 
 
 def _markdown_code(value: object, *, table_cell: bool = False) -> str:
     """Quote literal text without allowing code-span or table-cell breakouts."""
-    text = " ".join(str(value).splitlines())
+    text = _markdown_plain_text(value)
     if table_cell:
         text = text.replace("|", "\\|")
     delimiter = "`" * (max((len(run) for run in re.findall(r"`+", text)), default=0) + 1)

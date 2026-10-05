@@ -37,6 +37,7 @@ def test_json_marks_error_entries_as_unsuccessful() -> None:
         "` `` ``` <script>alert(1)</script> [safe](https://example.invalid)",
         "\\| **safe** &lt;!--",
         " leading and trailing spaces ",
+        "\x1b[2J\x00\u202eLOW\u202c\x9b\u2066safe\u2069",
     ],
 )
 @pytest.mark.parametrize(
@@ -86,8 +87,10 @@ def test_batch_markdown_treats_scan_content_as_literal_text(payload: str, field:
         entry["issues"][0][field] = payload
     original = deepcopy(entry)
 
-    tokens = parser.parse(_format_markdown([entry]))
+    report = _format_markdown([entry])
+    tokens = parser.parse(report)
 
+    assert all(character.isprintable() or character in "\n\t" for character in report)
     assert [token.type for token in tokens] == original_blocks
     for token in tokens:
         assert token.type not in {"html_block", "fence", "code_block"}
