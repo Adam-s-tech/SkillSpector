@@ -43,6 +43,7 @@ from .common import (
     get_context,
     get_context_from_lines,
     get_line_number,
+    is_reference_material,
     resolve_call_name,
 )
 from .pattern_defaults import PatternCategory
@@ -877,6 +878,7 @@ def analyze(
     line_starts, line_ends = _source_line_metadata(content)
     content_lines = content.splitlines()
     fence_ranges = _markdown_fence_ranges(content) if file_type in {"markdown", "text"} else None
+    reference_material = is_reference_material(file_path, file_type)
 
     def loc(ln: int) -> Location:
         return Location(file=file_path, start_line=ln)
@@ -1086,7 +1088,7 @@ def analyze(
             line_num = line_number(match.start())
             context = context_at(match.start())
             finding_tags = list(tag)
-            if _is_documentation_example(context, file_type):
+            if reference_material or _is_documentation_example(context, file_type):
                 finding_tags.extend(["contextual-triage", "likely-benign-context"])
             if line_num in pe5_best and pe5_best[line_num].confidence >= confidence:
                 continue
