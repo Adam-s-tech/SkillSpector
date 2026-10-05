@@ -53,18 +53,60 @@ export function redact(text: string, env: Env = process.env): string {
     // tokens so they cannot change words, JSON fields, or longer credentials.
     return value.length < 4 ? `(?<![A-Za-z0-9_-])${literal}(?![A-Za-z0-9_-])` : literal
   })
-  const credentialPattern = new RegExp([
+  // Look ahead so overlapping configured values are all covered. Matching
+  // still advances through the original text, never through replacement markers.
+  const credentialPattern = valuePatterns.length
+    ? new RegExp(`(?=(${valuePatterns.join("|")}))`, "g")
+    : undefined
+  const keyPattern = new RegExp([
     "sk-ant-[A-Za-z0-9_-]+",
     "\\bsk-[A-Za-z0-9_-]{6,}\\b",
     /\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY|INFERENCE_KEY)\s*[:=]\s*["']?)[^"'\s,}]+/.source,
-    ...valuePatterns,
   ].join("|"), "g")
-  // One pass keeps shorter configured values from splitting a key-shaped
-  // token or rewriting the replacement marker from an earlier match.
-  const scrub = (value: string): string => value.replace(
-    credentialPattern,
-    (_match, assignmentPrefix: string | undefined) => `${assignmentPrefix ?? ""}[REDACTED]`,
-  )
+  const scrub = (value: string): string => {
+    function* spans(pattern: RegExp | undefined, literal: boolean): Generator<[number, number]> {
+      if (!pattern) return
+      for (const match of value.matchAll(pattern)) {
+        const start = match.index + (literal ? 0 : (match[1]?.length ?? 0))
+        const end = match.index + (literal ? match[1].length : match[0].length)
+        yield [start, end]
+      }
+    }
+    const known = spans(credentialPattern, true)
+    const shaped = spans(keyPattern, false)
+    let nextKnown = known.next().value
+    let nextShaped = shaped.next().value
+    let cursor = 0
+    let start = -1
+    let end = -1
+    const parts: string[] = []
+    // Merge two ordered span streams in linear time. A shorter key/assignment
+    // match cannot expose the tail of a longer configured credential.
+    while (nextKnown || nextShaped) {
+      let span: [number, number]
+      if (nextKnown && (!nextShaped || nextKnown[0] <= nextShaped[0])) {
+        span = nextKnown
+        nextKnown = known.next().value
+      } else {
+        span = nextShaped!
+        nextShaped = shaped.next().value
+      }
+      if (span[0] > end) {
+        if (start >= 0) {
+          parts.push(value.slice(cursor, start), "[REDACTED]")
+          cursor = end
+        }
+        start = span[0]
+      }
+      end = Math.max(end, span[1])
+    }
+    if (start >= 0) {
+      parts.push(value.slice(cursor, start), "[REDACTED]")
+      cursor = end
+    }
+    parts.push(value.slice(cursor))
+    return parts.join("")
+  }
   try {
     const report = JSON.parse(text)
     if (report === null || typeof report !== "object") return scrub(text)

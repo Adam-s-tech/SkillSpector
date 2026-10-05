@@ -105,6 +105,22 @@ describe("redact", () => {
     }
   })
 
+  it("merges overlapping known values with shorter key and assignment matches", () => {
+    for (const [secret, input, expected] of [
+      ["alpha,beta", "OPENAI_API_KEY=alpha,beta", "OPENAI_API_KEY=[REDACTED]"],
+      ["alpha,beta", "OPENAI_API_KEY=prefix-alpha,beta", "OPENAI_API_KEY=[REDACTED]"],
+      ["sk-ant-alpha.beta", "sk-ant-alpha.beta", "[REDACTED]"],
+    ]) {
+      const env = { OPENAI_API_KEY: secret }
+      assert.equal(redact(input, env), expected)
+      assert.deepEqual(JSON.parse(redact(JSON.stringify({ code_snippet: input, risk_score: 12 }), env)), {
+        code_snippet: expected,
+        risk_score: 12,
+      })
+    }
+    assert.equal(redact("abcdef", { OPENAI_API_KEY: "abcd", ANTHROPIC_API_KEY: "cdef" }), "[REDACTED]")
+  })
+
   it("keeps JSON metadata readable and parseable with one-character placeholders", () => {
     for (const value of ["1", "e", "x"]) {
       const report = {
