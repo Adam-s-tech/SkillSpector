@@ -75,35 +75,35 @@ MAX_OUTPUT_BYTES = 10_000_000  # 10 MB safety cap on stdout
 MAX_STDERR_BYTES = 64_000  # stderr is only used for error snippets
 CLI_TIMEOUT_SECONDS = 300  # 5-minute per-call hard limit
 
-# Environment variables that must NOT be forwarded to child processes.
-# Includes API keys, cloud creds, SSH agent, and SkillSpector's own keys.
-_SECRET_ENV_PREFIXES: tuple[str, ...] = (
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_PROXY_API_KEY",
-    "OPENAI_API_KEY",
-    "SKILLSPECTOR_API_KEYS",
-    "SKILLSPECTOR_COMPAT_API_KEY",
-    "NVIDIA_INFERENCE_KEY",
-    "NVIDIA_INFERENCE_METADATA_KEY",
-    "AWS_",
-    "AZURE_",
-    "GOOGLE_",
-    "GCLOUD_",
-    "GCP_",
-    "SSH_",
-    "GPG_",
-    "GITHUB_TOKEN",
-    "GITLAB_TOKEN",
-    "HUGGINGFACE_TOKEN",
-    "HF_TOKEN",
-    "COHERE_API_KEY",
-    "REPLICATE_API_TOKEN",
-    "MISTRAL_API_KEY",
-    "TOGETHER_API_KEY",
-    "GROQ_API_KEY",
-    "FIREWORKS_API_KEY",
-    "LANGCHAIN_API_KEY",
-    "LANGSMITH_API_KEY",
+# Only runtime and local-login discovery variables cross into agent processes.
+# Do not inherit provider keys, arbitrary application variables, loader hooks,
+# or CLI configuration overrides from the operator's environment.
+_RUNTIME_ENV_NAMES = frozenset(
+    {
+        "PATH",
+        "PATHEXT",
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "XDG_DATA_HOME",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_COLLATE",
+        "LC_MESSAGES",
+        "LC_MONETARY",
+        "LC_NUMERIC",
+        "LC_TIME",
+        "TERM",
+        "NO_COLOR",
+    }
 )
 
 
@@ -117,18 +117,13 @@ class AgentCLIError(RuntimeError):
 
 
 def _scrub_env() -> dict[str, str]:
-    """Return a copy of ``os.environ`` with secret variables removed.
+    """Keep only runtime variables needed by the CLIs and their local logins.
 
-    Any variable whose name starts with a prefix in ``_SECRET_ENV_PREFIXES``
-    is stripped.  The resulting environment is passed to the subprocess.
+    Exact names (case-insensitive for Windows) fail closed for new secret names
+    and configuration overrides. Provider API keys are deliberately excluded:
+    agent CLI providers authenticate through the user's existing local login.
     """
-    clean: dict[str, str] = {}
-    for key, val in os.environ.items():
-        upper = key.upper()
-        if any(upper.startswith(p.upper()) for p in _SECRET_ENV_PREFIXES):
-            continue
-        clean[key] = val
-    return clean
+    return {key: val for key, val in os.environ.items() if key.upper() in _RUNTIME_ENV_NAMES}
 
 
 # ---------------------------------------------------------------------------
