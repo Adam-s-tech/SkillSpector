@@ -407,12 +407,25 @@ def test_cli_reports_failed_workers_with_completed_skills(tmp_path, monkeypatch,
     output = tmp_path / "report.json"
     monkeypatch.setattr(batch_scan, "_scan_skill_process", _mixed_scan_process)
     monkeypatch.setattr(
-        batch_scan, "_scan_skill_bounded",
+        batch_scan,
+        "_scan_skill_bounded",
         partial(batch_scan._scan_skill_bounded, timeout=3, startup_timeout=20),
     )
     monkeypatch.setattr(batch_scan, "create_api_key_pool_from_env", lambda: None)
     monkeypatch.setattr(
-        sys, "argv", ["batch_scan", str(tmp_path), "--no-llm", "--workers", "2", "-f", "json", "-o", str(output)]
+        sys,
+        "argv",
+        [
+            "batch_scan",
+            str(tmp_path),
+            "--no-llm",
+            "--workers",
+            "2",
+            "-f",
+            "json",
+            "-o",
+            str(output),
+        ],
     )
     with pytest.raises(SystemExit) as exited:
         batch_scan._main_impl()
@@ -422,7 +435,9 @@ def test_cli_reports_failed_workers_with_completed_skills(tmp_path, monkeypatch,
     entries = {entry["skill"]["name"]: entry for entry in report["skills"]}
     assert set(entries) == {failed_name, "normal"}
     assert entries[failed_name]["risk_assessment"]["severity"] == "ERROR"
-    expected = "scan timed out after 3s" if failed_name == "stalled" else "worker exited with code 7"
+    expected = (
+        "scan timed out after 3s" if failed_name == "stalled" else "worker exited with code 7"
+    )
     assert expected in entries[failed_name]["error"]
     assert entries[failed_name]["execution_successful"] is False
     assert not entries["normal"].get("error")
@@ -464,5 +479,7 @@ def test_scan_forwards_verbose_logging(batch_skill, monkeypatch):
     _mock_scan(monkeypatch)
     levels = []
     monkeypatch.setattr(batch_scan, "set_level", levels.append)
-    batch_scan._scan_skill(skill, skill.parent, use_llm=False, lang="en", require_llm=False, verbose=True)
+    batch_scan._scan_skill(
+        skill, skill.parent, use_llm=False, lang="en", require_llm=False, verbose=True
+    )
     assert levels == ["DEBUG"]
