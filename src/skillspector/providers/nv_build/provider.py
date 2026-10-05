@@ -39,6 +39,10 @@ class NvBuildProvider:
     """build.nvidia.com credentials + bundled-YAML metadata provider."""
 
     # GLM-5.2 is retired on the hosted endpoint (HTTP 410).
+    # Choose defaults for detection, not latency alone: a faster replacement
+    # previously missed the credential-disclosure control. GLM-5.3 detected
+    # SSD-3 on that control; the prompt-injection control remains unverified
+    # because its hosted requests timed out. Recheck both before replacing it.
     DEFAULT_MODEL = "z-ai/glm-5.3"
     SLOT_DEFAULTS: dict[str, str] = {}
 
