@@ -44,7 +44,7 @@ export function truncate(text: string, max: number): string {
 export function redact(text: string, env: Env = process.env): string {
   const credentialValues = [...new Set(
     CREDENTIAL_ENV_NAMES.map((name) => env[name]?.trim()).filter(
-      (value): value is string => Boolean(value && value.length >= 4),
+      (value): value is string => Boolean(value),
     ),
   )].sort((left, right) => right.length - left.length)
   const credentialPattern = credentialValues.length

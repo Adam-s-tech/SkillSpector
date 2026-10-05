@@ -88,6 +88,33 @@ describe("redact", () => {
     assert.equal(out.match(/\[REDACTED\]/g)?.length, CREDENTIAL_ENV_NAMES.length)
   })
 
+  it("redacts one-, two-, and three-character values for every supported credential name", () => {
+    for (const name of CREDENTIAL_ENV_NAMES) {
+      for (const value of ["7", "7x", "7xy"]) {
+        assert.equal(redact(`before ${value} after`, { [name]: value }), "before [REDACTED] after")
+      }
+    }
+  })
+
+  it("ignores empty and unset credentials without matching every output position", () => {
+    assert.equal(redact("ordinary output", {
+      OPENAI_API_KEY: "",
+      ANTHROPIC_API_KEY: undefined,
+      NVIDIA_INFERENCE_KEY: " \t\n",
+    }), "ordinary output")
+  })
+
+  it("redacts trimmed, overlapping, and regex-bearing short values in one pass", () => {
+    assert.equal(redact("xyz xy x .* [ R", {
+      OPENAI_API_KEY: " xyz ",
+      ANTHROPIC_API_KEY: "xy",
+      NVIDIA_INFERENCE_KEY: "x",
+      AWS_SECRET_ACCESS_KEY: ".*",
+      AWS_SESSION_TOKEN: "[",
+      AWS_SECURITY_TOKEN: "R",
+    }), "[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]")
+  })
+
   it("redacts NVIDIA and AWS assignments even when the environment is unavailable", () => {
     const out = redact(
       "NVIDIA_INFERENCE_KEY=nvapi-secret AWS_SECRET_ACCESS_KEY: aws-secret",
@@ -219,6 +246,27 @@ describe("formatExecError", () => {
     })
     assert.ok(!out.includes("hunter2"))
   })
+
+  it("redacts short credentials from every failure output path before truncation", () => {
+    for (const value of ["7", "7x", "7xy"]) {
+      const env = { OPENAI_API_KEY: value }
+      const stdout = `${"o".repeat(MAX_STDOUT - 1)}${value} suffix`
+      const stderr = `${"e".repeat(MAX_STDERR - 1)}${value} suffix`
+      for (const failure of [
+        { code: 1, stdout, stderr },
+        { code: 2, stdout, stderr },
+        { killed: true, stdout, stderr },
+        { name: "AbortError", stdout, stderr },
+        { code: 9, stdout, stderr },
+        { code: 9, message: stderr },
+        stderr,
+        { code: 2, stderr: `Usage: skillspector\nError: rejected ${value}` },
+      ]) {
+        const out = formatExecError("bin", failure, env)
+        assert.ok(!out.includes("7"), `${value} leaked from ${JSON.stringify(failure).slice(0, 40)}`)
+      }
+    }
+  })
 })
 
 describe("formatSuccess", () => {
@@ -240,6 +288,20 @@ describe("formatSuccess", () => {
     assert.ok(out.includes('{"findings":[]}'))
     assert.ok(out.includes("stderr:\nbaseline detected"))
     assert.ok(out.includes("[truncated "))
+  })
+
+  it("redacts short credentials in both successful streams before truncation", () => {
+    for (const value of ["7", "7x", "7xy"]) {
+      const out = formatSuccess(
+        undefined,
+        `${"o".repeat(MAX_STDOUT - 1)}${value} suffix`,
+        `${"e".repeat(MAX_STDERR - 1)}${value} suffix`,
+        { OPENAI_API_KEY: value },
+      )
+      assert.ok(!out.includes("7"))
+      assert.ok(out.includes("stderr:\n"))
+      assert.ok(out.includes("[truncated "))
+    }
   })
 })
 
