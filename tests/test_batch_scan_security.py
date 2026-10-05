@@ -369,7 +369,7 @@ def _assert_process_stopped(pid):
 
 
 def _slow_start_process(skill_dir, root, result_path, options, started):
-    time.sleep(0.3)
+    time.sleep(1.5)
     _successful_scan_process(skill_dir, root, result_path, options, started)
 
 
@@ -380,7 +380,7 @@ def _never_started_process(skill_dir, root, result_path, options, started):
 def test_worker_startup_has_a_separate_bound(tmp_path, monkeypatch):
     monkeypatch.setattr(batch_scan, "_scan_skill_process", _slow_start_process)
     entry, error, name = batch_scan._scan_skill_bounded(
-        tmp_path, tmp_path, timeout=0.1, startup_timeout=20
+        tmp_path, tmp_path, timeout=1, startup_timeout=20
     )
     assert entry["skill"]["name"] == name == tmp_path.name
     assert error is None
