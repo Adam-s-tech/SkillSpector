@@ -44,6 +44,7 @@ from .common import (
     MARKDOWN_FENCE_OPEN,
     get_context,
     get_line_number,
+    is_reference_material,
 )
 from .pattern_defaults import PatternCategory
 
@@ -3788,7 +3789,12 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
                     complete_match=match.group(0),
                 )
             )
-    # TM4: privileged K8s workload. Example filtering is delegated to the runner.
+    # TM4: privileged K8s workload. Example filtering is delegated to the runner,
+    # which keeps reference material because it is part of the skill. Findings in
+    # top-level `references/` are tagged for triage only; the agent reads those
+    # files as instructions, so confidence and score are left unchanged.
+    reference_material = is_reference_material(file_path, file_type)
+    tm4_tags = [*tag, "contextual-triage", "likely-benign-context"] if reference_material else tag
     for pattern, confidence in TM4_PATTERNS:
         for match in re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE):
             line_num = get_line_number(content, match.start())
@@ -3799,7 +3805,7 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
                     severity=Severity.HIGH,
                     location=loc(line_num),
                     confidence=confidence,
-                    tags=tag,
+                    tags=tm4_tags,
                     context=ctx(match.start()),
                     matched_text=match.group(0)[:200],
                     complete_match=match.group(0),
