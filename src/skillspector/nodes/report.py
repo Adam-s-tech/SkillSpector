@@ -1414,7 +1414,7 @@ def _markdown_plain_text(value: object) -> str:
 def _markdown_cell(value: object) -> str:
     """Render dynamic prose as literal text on one Markdown line."""
     text = escape_html(_markdown_plain_text(value), quote=False)
-    return re.sub(r"([\\`*_{}\[\]()#+.!|>-])", r"\\\1", text)
+    return re.sub(r"([\\`*_{}\[\]()#+.!|>~-])", r"\\\1", text)
 
 
 def _markdown_code(value: object, *, table_cell: bool = False) -> str:

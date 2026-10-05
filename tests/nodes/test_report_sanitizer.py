@@ -123,6 +123,8 @@ def test_report_redacts_url_credentials_from_every_finding_field(fmt: str, schem
 
     result = report(state)
     rendered = result["report_body"]
+    if fmt == "markdown":
+        rendered = MarkdownIt().enable("table").render(rendered)
     serialized_findings = json.dumps([item.to_dict() for item in result["filtered_findings"]])
     for secret in (username, password, token):
         assert secret not in rendered
@@ -149,6 +151,8 @@ def test_report_sanitizes_llm_message_copied_to_pattern(fmt: str) -> None:
 
     result = report(state)
     rendered = result["report_body"]
+    if fmt == "markdown":
+        rendered = MarkdownIt().enable("table").render(rendered)
     serialized_findings = json.dumps([item.to_dict() for item in result["filtered_findings"]])
     assert "\x1b" not in rendered
     assert "secret" not in rendered
@@ -183,6 +187,7 @@ def test_nested_evidence_preserves_scalar_types_and_original_finding() -> None:
         "safe` | LOW |\r\n## Issues (0)\rNo security issues detected.\n<!--",
         "` `` ``` <script>alert(1)</script> [safe](https://example.invalid)",
         "\\| **safe** &lt;!--",
+        "~~hidden~~",
         "\x1b[2J\x00\u202eLOW\u202c\x9b\u2066safe\u2069",
     ],
 )
@@ -252,7 +257,7 @@ def test_markdown_report_contains_untrusted_fields(payload: str, field: str) -> 
             "limitations": ["limitation"],
         },
     }
-    parser = MarkdownIt("commonmark", {"html": True}).enable("table")
+    parser = MarkdownIt("commonmark", {"html": True}).enable(["table", "strikethrough"])
     original_blocks = [token.type for token in parser.parse(_format_markdown(**arguments))]
     if field == "name":
         arguments["manifest"]["name"] = payload
@@ -290,7 +295,7 @@ def test_markdown_report_contains_untrusted_fields(payload: str, field: str) -> 
     for token in tokens:
         assert token.type not in {"html_block", "fence", "code_block"}
         assert not any(
-            child.type in {"html_inline", "link_open", "image"} for child in token.children or []
+            child.type in {"html_inline", "link_open", "image", "s_open"} for child in token.children or []
         )
     assert arguments == original
 
