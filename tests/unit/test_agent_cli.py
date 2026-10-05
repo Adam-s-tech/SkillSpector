@@ -291,11 +291,28 @@ class TestScrubEnv:
             "SystemRoot": "C:/Windows",
             "AppData": "C:/Users/operator/AppData",
             "XDG_DATA_HOME": "/home/operator/.local/share",
+            "CLAUDE_CONFIG_DIR": "/home/operator/claude-login",
+            "HTTPS_PROXY": "http://proxy.example:8080",
+            "https_proxy": "http://proxy.example:8080",
+            "HTTP_PROXY": "http://proxy.example:8080",
+            "http_proxy": "http://proxy.example:8080",
+            "ALL_PROXY": "socks5://proxy.example:1080",
+            "all_proxy": "socks5://proxy.example:1080",
+            "NO_PROXY": "localhost",
+            "no_proxy": "localhost",
+            "NODE_EXTRA_CA_CERTS": "/certs/ca.pem",
+            "SSL_CERT_FILE": "/certs/ca.pem",
+            "SSL_CERT_DIR": "/certs",
         }
         secrets = dict.fromkeys(
             (
                 "ANTHROPIC_AUTH_TOKEN",
                 "GEMINI_API_KEY",
+                "GH_TOKEN",
+                "GH_ENTERPRISE_TOKEN",
+                "GIT_SSL_CERT",
+                "GIT_SSL_KEY",
+                "SSLKEYLOGFILE",
                 "OPENROUTER_API_KEY",
                 "NPM_TOKEN",
                 "PYPI_TOKEN",
@@ -312,6 +329,24 @@ class TestScrubEnv:
         with patch.dict(_agent_cli.os.environ, original, clear=True):
             assert _scrub_env() == runtime
             assert dict(_agent_cli.os.environ) == original
+
+    def test_claude_auth_probe_uses_the_inference_environment(self) -> None:
+        runtime = {
+            "PATH": "/usr/bin",
+            "CLAUDE_CONFIG_DIR": "/home/operator/claude-login",
+            "HTTPS_PROXY": "http://proxy.example:8080",
+        }
+        with (
+            patch.dict(_agent_cli.os.environ, runtime | {"GH_TOKEN": "synthetic-secret"}, clear=True),
+            patch.object(_agent_cli.subprocess, "run") as run,
+        ):
+            run.return_value = subprocess.CompletedProcess(
+                [CLAUDE_BINARY, "auth", "status"], 0, b'{"loggedIn": true}'
+            )
+            assert _agent_cli._claude_auth_check(CLAUDE_BINARY) == (True, None)
+        assert run.call_args.kwargs["env"] == runtime
+        assert run.call_args.kwargs["shell"] is False
+        assert run.call_args.kwargs["timeout"] == 15
 
     @pytest.mark.parametrize("binary_name", ["claude", "gemini"])
     @pytest.mark.parametrize("lowercase", [False, True])

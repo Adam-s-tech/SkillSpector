@@ -75,7 +75,7 @@ MAX_OUTPUT_BYTES = 10_000_000  # 10 MB safety cap on stdout
 MAX_STDERR_BYTES = 64_000  # stderr is only used for error snippets
 CLI_TIMEOUT_SECONDS = 300  # 5-minute per-call hard limit
 
-# Only runtime and local-login discovery variables cross into agent processes.
+# Only runtime, network transport, and local-login discovery variables cross into agent processes.
 # Do not inherit provider keys, arbitrary application variables, loader hooks,
 # or CLI configuration overrides from the operator's environment.
 _RUNTIME_ENV_NAMES = frozenset(
@@ -92,6 +92,14 @@ _RUNTIME_ENV_NAMES = frozenset(
         "TMP",
         "TMPDIR",
         "XDG_DATA_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
         "LANG",
         "LANGUAGE",
         "LC_ALL",
@@ -737,7 +745,11 @@ def _claude_auth_check(binary: str) -> tuple[bool, str | None]:
     """Check claude is authenticated via ``claude auth status`` (no inference)."""
     try:
         result = subprocess.run(
-            [binary, "auth", "status"], capture_output=True, shell=False, timeout=15
+            [binary, "auth", "status"],
+            capture_output=True,
+            shell=False,
+            timeout=15,
+            env=_scrub_env(),
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         return False, f"claude auth status check failed: {exc}"
