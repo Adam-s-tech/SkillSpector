@@ -814,11 +814,10 @@ files are scanned normally.
 
 ### Stage 2: LLM Semantic Analysis (Optional)
 - Evaluates context and intent
-- Enriches findings with contextual explanations and helps identify false positives
+- Confirmed findings may gain an explanation and higher confidence, never lower
 - Every deterministic finding stays in the report whether the model confirms it, disputes it, or does not address it
-- Findings the model does not confirm are tagged `llm-unconfirmed` in JSON and SARIF output
-- Confirmed findings may receive an explanation and higher confidence, never lower
-- Provides human-readable explanations
+- Findings the model reviews but does not confirm (disputed, low-confidence, or unaddressed) are tagged `llm-unconfirmed` in JSON and SARIF output
+- Findings whose review fails are kept without that tag; `evidence.llm_review_outcome` distinguishes `confirmed`, `disagreed`, `low-confidence`, `missing`, and `failed` in JSON and SARIF output
 - Results depend on the configured model and prompt context; Stage 2 does not replace
   deterministic findings or guarantee a particular precision rate
 
