@@ -41,8 +41,8 @@ which enforces:
   of capability removal).
 
 The JSON output envelope (``claude -p --output-format json``) is parsed
-and the assistant text is returned.  ``codex exec --json`` produces
-JSONL events; the last assistant message is extracted.
+and the assistant text is returned. The Codex JSONL parser is retained for
+compatibility, but Codex inference is disabled before a subprocess is started.
 """
 
 from __future__ import annotations
@@ -276,6 +276,8 @@ def _parse_claude_output(raw: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Registered but disabled. Re-enabling requires a pinned CLI version and a
+# verified policy preflight that denies every model-driven tool and host-file read.
 _CODEX_DISABLED_REASON = (
     "codex_cli is disabled: its read-only sandbox still permits commands to read "
     "host files, and SkillSpector has no verified deny-all-tools policy for Codex. "
