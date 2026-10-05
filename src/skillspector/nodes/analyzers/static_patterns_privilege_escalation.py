@@ -86,7 +86,28 @@ PE2_CODE_PATTERNS = [
     (r"doas\s+", 0.7),
     (r"pkexec\s+", 0.75),
     (r"chmod\s+[ugo]*[+-=]*s", 0.85),
-    (r"chmod\s+[0-7]*[4567][0-7]{2}", 0.8),
+    # A numeric mode only grants setuid/setgid/sticky through its leading octal
+    # digit, so the full four-digit form is what has to be present.  Accepting a
+    # bare 4/5/6/7 anywhere in the mode flagged every ordinary permission whose
+    # rwx triple happened to contain one (chmod 600, chmod 644, chmod 755, ...).
+    # Leading digit 2-7 selects setgid (2, 3, 6) or setuid (4, 5, 7).  A bare 1
+    # only adds sticky, which grants nobody new access, so it stays unreported.
+    # The pieces around the mode: 0* absorbs the leading zeros GNU and BSD chmod
+    # accept, the optional [+=] accepts the operator GNU chmod allows in front of
+    # the digits (chmod +4000, chmod =4755), the option group lets
+    # `chmod -R 4755 dir` reach the mode, the optional quotes cover
+    # `chmod "6755"`, and the trailing lookahead rejects a longer digit run
+    # (chmod 47554) as well as a malformed trailing word (chmod 4755x) while still
+    # matching every non-alphanumeric terminator (space, end of line, `;`, `&`,
+    # `|`, `)`, `$`, a quote or a backtick).
+    # The option group takes a single leading dash on purpose: with `--?` a token
+    # starting `--` can be split between the two alternatives, and on a line of
+    # unmatched `-- ` tokens that made the match exponential.  `[\w=-]*` already
+    # absorbs the second dash of a long option, so `-` alone covers both.
+    (
+        r"chmod\s+(?:-[\w=-]*[ \t]+)*[\"']?[+=]?0*[2-7][0-7]{3}[\"']?(?![0-9\w])",
+        0.8,
+    ),
 ]
 PE2_PROSE_PATTERNS = [
     (r"(?:run|execute)\s+(?:as|with)\s+root", 0.8),
