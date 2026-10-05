@@ -6,8 +6,12 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
-from contrib.batch_scan.reports import _format_json
+import pytest
+from markdown_it import MarkdownIt
+
+from contrib.batch_scan.reports import _format_json, _format_markdown
 
 
 def test_json_marks_error_entries_as_unsuccessful() -> None:
@@ -23,3 +27,72 @@ def test_json_marks_error_entries_as_unsuccessful() -> None:
 
     assert payload["skills"][0]["error"] == "scan crashed"
     assert payload["skills"][0]["execution_successful"] is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "safe` | 0/100 | LOW | 0 | en |\n<!--",
+        "\r\n## Issues (0)\rNo security issues detected.\n<!--",
+        "` `` ``` <script>alert(1)</script> [safe](https://example.invalid)",
+        "\\| **safe** &lt;!--",
+        " leading and trailing spaces ",
+    ],
+)
+@pytest.mark.parametrize(
+    "field",
+    [
+        "name",
+        "language",
+        "id",
+        "message",
+        "explanation",
+        "remediation",
+        "file",
+        "reason_code",
+        "path",
+        "ledger_message",
+    ],
+)
+def test_batch_markdown_treats_scan_content_as_literal_text(payload: str, field: str) -> None:
+    entry = {
+        "skill": {"name": "sample", "language": "zh"},
+        "risk_assessment": {"score": 90, "severity": "CRITICAL"},
+        "issues": [
+            {
+                "id": "P1",
+                "message": "finding",
+                "remediation": "review",
+                "location": {"file": "SKILL.md", "start_line": 1},
+            }
+        ],
+        "analysis_completeness": {
+            "ledger_exceptions": [
+                {"reason_code": "partial", "path": "run.py", "message": "inspect"}
+            ]
+        },
+    }
+    parser = MarkdownIt("commonmark", {"html": True}).enable("table")
+    original_blocks = [token.type for token in parser.parse(_format_markdown([entry]))]
+    if field in {"name", "language"}:
+        entry["skill"][field] = payload
+    elif field == "file":
+        entry["issues"][0]["location"][field] = payload
+    elif field in {"reason_code", "path", "ledger_message"}:
+        entry["analysis_completeness"]["ledger_exceptions"][0][
+            "message" if field == "ledger_message" else field
+        ] = payload
+    else:
+        entry["issues"][0][field] = payload
+    original = deepcopy(entry)
+
+    tokens = parser.parse(_format_markdown([entry]))
+
+    assert [token.type for token in tokens] == original_blocks
+    for token in tokens:
+        assert token.type not in {"html_block", "fence", "code_block"}
+        assert not any(
+            child.type in {"html_inline", "link_open", "image"} for child in token.children or []
+        )
+    assert entry == original
+    assert json.loads(_format_json([entry]))["skills"][0]["skill"]["name"] == entry["skill"]["name"]
