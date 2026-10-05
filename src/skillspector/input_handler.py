@@ -1158,9 +1158,20 @@ class InputHandler:
             for key, value in os.environ.items()
             if key.upper()
             in {
-                "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR",
-                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-                "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "SSL_CERT_FILE", "SSL_CERT_DIR",
+                "PATH",
+                "SYSTEMROOT",
+                "WINDIR",
+                "TEMP",
+                "TMP",
+                "TMPDIR",
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NO_PROXY",
+                "GIT_SSL_CAINFO",
+                "GIT_SSL_CAPATH",
+                "SSL_CERT_FILE",
+                "SSL_CERT_DIR",
                 "CURL_CA_BUNDLE",
             }
         }
@@ -1175,21 +1186,25 @@ class InputHandler:
             GIT_ALLOW_PROTOCOL="https",
             GIT_CEILING_DIRECTORIES=str(isolated_home.parent),
         )
-        return [
-            "git",
-            "-C",
-            str(isolated_home),
-            "-c",
-            "credential.helper=",
-            "-c",
-            "core.askPass=",
-            "-c",
-            f"core.hooksPath={os.devnull}",
-            "-c",
-            "http.extraHeader=",
-            "-c",
-            "http.followRedirects=false",
-        ], env, url
+        return (
+            [
+                "git",
+                "-C",
+                str(isolated_home),
+                "-c",
+                "credential.helper=",
+                "-c",
+                "core.askPass=",
+                "-c",
+                f"core.hooksPath={os.devnull}",
+                "-c",
+                "http.extraHeader=",
+                "-c",
+                "http.followRedirects=false",
+            ],
+            env,
+            url,
+        )
 
     def _list_remote_refs(self, repository_url: str) -> set[str]:
         """Return the branch/tag names advertised by the remote repository.

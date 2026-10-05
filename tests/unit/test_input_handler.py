@@ -724,11 +724,23 @@ def test_anonymous_git_drops_ambient_auth_and_config(
         "GIT_CEILING_DIRECTORIES": "/synthetic/ceiling",
     }
     transport = {
-        key: "/synthetic/ca" if "CA" in key or key.startswith("SSL_") else "http://proxy.example:8080"
+        key: "/synthetic/ca"
+        if "CA" in key or key.startswith("SSL_")
+        else "http://proxy.example:8080"
         for key in (
-            "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy",
-            "NO_PROXY", "no_proxy", "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "SSL_CERT_FILE",
-            "SSL_CERT_DIR", "CURL_CA_BUNDLE",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
+            "GIT_SSL_CAINFO",
+            "GIT_SSL_CAPATH",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "CURL_CA_BUNDLE",
         )
     }
     for key, value in (hostile | transport).items():
@@ -836,7 +848,14 @@ def test_anonymous_git_normalizes_repository_urls_without_redirects(operation, t
 def test_anonymous_git_cannot_read_enclosing_repository_config(tmp_path):
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
     subprocess.run(
-        ["git", "-C", str(tmp_path), "config", "http.https://github.com/.extraheader", "synthetic-header"],
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "config",
+            "http.https://github.com/.extraheader",
+            "synthetic-header",
+        ],
         check=True,
     )
     handler = InputHandler(allow_git_credentials=False)
@@ -845,7 +864,9 @@ def test_anonymous_git_cannot_read_enclosing_repository_config(tmp_path):
         argv, env, _ = handler._git_invocation("https://github.com/org/repo")
     result = subprocess.run(
         [*argv, "config", "--get-urlmatch", "http.extraheader", "https://github.com/org/repo"],
-        env=env, capture_output=True, check=False,
+        env=env,
+        capture_output=True,
+        check=False,
     )
     assert b"synthetic-header" not in result.stdout
     assert result.stdout.strip() == b""
