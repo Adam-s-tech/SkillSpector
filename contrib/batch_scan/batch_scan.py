@@ -61,6 +61,7 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from pathlib import Path
+
 from skillspector.logging_config import set_level
 
 from .api_pool import create_api_key_pool_from_env
@@ -68,6 +69,7 @@ from .discovery import discover_skills
 from .reports import _format_json as format_json
 from .reports import _format_markdown as format_markdown
 from .reports import _format_terminal as format_terminal
+from .reports import _terminal_text
 from .runner import run_one
 
 # Progress-print lock — Rich consoles are not thread-safe; serialize output
@@ -138,10 +140,15 @@ def _main_impl() -> None:
     # -- Rich detection -------------------------------------------------------
     try:
         from rich.console import Console
+        from rich.markup import escape
     except ImportError:
         Console = None  # type: ignore[assignment]  # noqa: N806
 
     c = Console() if Console is not None else None
+
+    def display(value: object) -> str:
+        text = _terminal_text(value)
+        return escape(text) if c else text
 
     def _print(*args: object, **kwargs: object) -> None:
         """Print through Rich when available, falling back to plain text."""
@@ -226,7 +233,7 @@ def _main_impl() -> None:
     # -- Validation ----------------------------------------------------------
     root = args.input_dir.resolve()
     if not root.is_dir():
-        _print(f"[red]Error:[/red] {root} is not a directory", file=sys.stderr)
+        _print(f"[red]Error:[/red] {display(root)} is not a directory", file=sys.stderr)
         sys.exit(2)
 
     skill_dirs = discover_skills(root)
@@ -254,7 +261,7 @@ def _main_impl() -> None:
     )
     _print(
         f"\n[bold]SkillSpector Batch Scan[/bold] — "
-        f"{len(skill_dirs)} skill(s) in [dim]{root}[/dim]"
+        f"{len(skill_dirs)} skill(s) in [dim]{display(root)}[/dim]"
         f"  ([cyan]{args.workers} workers[/cyan]{pool_note})\n"
     )
 
@@ -296,7 +303,7 @@ def _main_impl() -> None:
                 errors += 1
                 with _print_lock:
                     _print(
-                        f"  [{idx}/{total}] [cyan]{rel_name}[/cyan] → "
+                        f"  [{idx}/{total}] [cyan]{display(rel_name)}[/cyan] → "
                         f"[red]TIMEOUT (90s)[/red]"
                     )
                 # Don't retry — the worker thread is still stuck and a
@@ -309,7 +316,7 @@ def _main_impl() -> None:
                 errors += 1
                 with _print_lock:
                     _print(
-                        f"  [{idx}/{total}] [cyan]{rel_name}[/cyan] → "
+                        f"  [{idx}/{total}] [cyan]{display(rel_name)}[/cyan] → "
                         f"[red]CRASH[/red]"
                     )
                 continue
@@ -322,7 +329,7 @@ def _main_impl() -> None:
                 if lang != "en" and not use_llm and args.require_llm:
                     _print(
                         f"[yellow]WARNING:[/yellow] non-English skill "
-                        f"'{rel_name}' ({lang}) scanned with --no-llm. "
+                        f"'{display(rel_name)}' ({display(lang)}) scanned with --no-llm. "
                         f"Static pattern recall is reduced for this language. "
                         f"Re-run without --no-llm for full coverage, or use "
                         f"--no-require-llm to suppress this warning.",
@@ -332,8 +339,8 @@ def _main_impl() -> None:
                 if error_msg:
                     errors += 1
                     _print(
-                        f"  [{idx}/{total}] [cyan]{rel_name}[/cyan] → "
-                        f"[red]ERROR: {error_msg}[/red]"
+                        f"  [{idx}/{total}] [cyan]{display(rel_name)}[/cyan] → "
+                        f"[red]ERROR: {display(error_msg)}[/red]"
                     )
                 else:
                     risk = entry.get("risk_assessment", {})
@@ -344,8 +351,8 @@ def _main_impl() -> None:
                         has_high_risk = True
                     color = _sev_colors.get(severity, "")
                     _print(
-                        f"  [{idx}/{total}] [cyan]{rel_name}[/cyan] → "
-                        f"[{color}]{score}/100 {severity}[/{color}] "
+                        f"  [{idx}/{total}] [cyan]{display(rel_name)}[/cyan] → "
+                        f"[{color}]{score}/100 {display(severity)}[/{color}] "
                         f"({n_issues} issue(s))"
                     )
 
@@ -384,10 +391,10 @@ def _main_impl() -> None:
 
     if args.output:
         args.output.write_text(report_body, encoding="utf-8")
-        _print(f"\n[green]Batch report saved to:[/green] {args.output}")
+        _print(f"\n[green]Batch report saved to:[/green] {display(args.output)}")
     else:
         if fmt == "terminal":
-            _print(report_body)
+            _print(report_body, markup=False, highlight=False)
         else:
             sys.stdout.write(report_body + "\n")
 

@@ -90,6 +90,7 @@ def _exception_groups(results: list[dict[str, object]]) -> list[tuple[str, list[
 def _format_terminal(results: list[dict[str, object]]) -> str:
     try:
         from rich.console import Console
+        from rich.markup import escape
         from rich.panel import Panel
         from rich.table import Table
     except ImportError:
@@ -181,15 +182,15 @@ def _format_terminal(results: list[dict[str, object]]) -> str:
         lr = _lr_icon(sev, lang)
 
         if r.get("error"):
-            table.add_row(str(name), "-", "ERR", "[red]ERROR[/red]", "—", lang)
+            table.add_row(escape(_terminal_text(name)), "-", "ERR", "[red]ERROR[/red]", "—", escape(_terminal_text(lang)))
         else:
             table.add_row(
-                str(name),
+                escape(_terminal_text(name)),
                 lr,
                 f"[{color}]{score}/100[/{color}]",
-                f"[{color}]{sev}[/{color}]",
+                f"[{color}]{escape(_terminal_text(sev))}[/{color}]",
                 str(issues),
-                lang,
+                escape(_terminal_text(lang)),
             )
     capture.print(table)
     capture.print()
@@ -209,12 +210,13 @@ def _format_terminal(results: list[dict[str, object]]) -> str:
             f"[green]{low_count} skill(s)[/green] with LOW risk — likely safe"
         )
     for skill_name, exceptions in _exception_groups(results):
-        capture.print(f"[bold]Ledger exceptions — {skill_name}[/bold]")
+        capture.print(f"[bold]Ledger exceptions — {escape(_terminal_text(skill_name))}[/bold]")
         for exception in exceptions:
             capture.print(
                 "  - "
-                f"{exception.get('reason_code', 'unknown')} "
-                f"{exception.get('path', '')}: {exception.get('message', '')}"
+                f"{_terminal_text(exception.get('reason_code', 'unknown'))} "
+                f"{_terminal_text(exception.get('path', ''))}: {_terminal_text(exception.get('message', ''))}",
+                markup=False,
             )
     capture.print()
 
@@ -237,6 +239,8 @@ def _lr_icon(severity: str, language: str) -> str:
 
 
 def _print_source_breakdown(c, results: list[dict[str, object]]) -> None:
+    from rich.markup import escape
+
     group_stats: dict[str, dict[str, int]] = defaultdict(
         lambda: {"total": 0, "CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
     )
@@ -251,7 +255,7 @@ def _print_source_breakdown(c, results: list[dict[str, object]]) -> None:
         c.print("[bold]Source Breakdown:[/bold]")
         for group in sorted(group_stats):
             st = group_stats[group]
-            parts = [f"  {group:<30s} {st['total']:>4d} skills"]
+            parts = [f"  {escape(_terminal_text(group)):<30s} {st['total']:>4d} skills"]
             if st["CRITICAL"]:
                 parts.append(f"[bold red]{st['CRITICAL']} CRITICAL[/bold red]")
             if st["HIGH"]:
@@ -263,6 +267,8 @@ def _print_source_breakdown(c, results: list[dict[str, object]]) -> None:
 
 
 def _print_language_breakdown(c, results: list[dict[str, object]]) -> None:
+    from rich.markup import escape
+
     lang_stats: dict[str, int] = defaultdict(int)
     lang_non_en: set[str] = set()
     for r in results:
@@ -279,10 +285,15 @@ def _print_language_breakdown(c, results: list[dict[str, object]]) -> None:
                 c.print(f"  {lang:<6s} {count:>4d} skills  (static + LLM coverage: full)")
             else:
                 c.print(
-                    f"  {lang:<6s} {count:>4d} skills  "
+                    f"  {escape(_terminal_text(lang)):<6s} {count:>4d} skills  "
                     f"[yellow](static: partial, LLM: full)[/yellow]"
                 )
         c.print()
+
+
+def _terminal_text(value: object) -> str:
+    """Keep an untrusted console field on one line without terminal controls."""
+    return " ".join("".join(c for c in str(value) if c.isprintable() or c in "\r\n\t").split())
 
 
 def _format_terminal_plain(results: list[dict[str, object]]) -> str:
@@ -291,15 +302,15 @@ def _format_terminal_plain(results: list[dict[str, object]]) -> str:
         risk = r.get("risk_assessment", {})
         skill = r.get("skill", {})
         lines.append(
-            f"  {skill.get('name', '?'):40s} "
-            f"{risk.get('score', 0):>3}/100 {risk.get('severity', 'LOW'):<8s}"
+            f"  {_terminal_text(skill.get('name', '?')):40s} "
+            f"{risk.get('score', 0):>3}/100 {_terminal_text(risk.get('severity', 'LOW')):<8s}"
         )
     for skill_name, exceptions in _exception_groups(results):
-        lines.append(f"Ledger exceptions — {skill_name}")
+        lines.append(f"Ledger exceptions — {_terminal_text(skill_name)}")
         for exception in exceptions:
             lines.append(
-                f"  - {exception.get('reason_code', 'unknown')} "
-                f"{exception.get('path', '')}: {exception.get('message', '')}"
+                f"  - {_terminal_text(exception.get('reason_code', 'unknown'))} "
+                f"{_terminal_text(exception.get('path', ''))}: {_terminal_text(exception.get('message', ''))}"
             )
     return "\n".join(lines)
 

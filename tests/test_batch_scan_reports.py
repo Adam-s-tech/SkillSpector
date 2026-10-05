@@ -11,7 +11,12 @@ from copy import deepcopy
 import pytest
 from markdown_it import MarkdownIt
 
-from contrib.batch_scan.reports import _format_json, _format_markdown
+from contrib.batch_scan.reports import (
+    _format_json,
+    _format_markdown,
+    _format_terminal,
+    _format_terminal_plain,
+)
 
 
 def test_json_marks_error_entries_as_unsuccessful() -> None:
@@ -117,3 +122,44 @@ def test_batch_markdown_code_preserves_literal_values(value: str, table_cell: bo
         if child.type == "code_inline"
     ]
     assert code == [value]
+
+
+@pytest.mark.parametrize("formatter", [_format_terminal, _format_terminal_plain])
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        ("[/bad]", "[/bad]"),
+        ("[bold]x[/bold]", "[bold]x[/bold]"),
+        ("a\r\nb\x1b[31m\x00c\u202ed", "a b[31mcd"),
+    ],
+)
+@pytest.mark.parametrize("field", ["name", "reason_code", "path", "message"])
+def test_terminal_batch_fields_are_literal_and_control_free(formatter, payload, expected, field):
+    entry = {
+        "skill": {"name": "sample", "language": "en"},
+        "risk_assessment": {"score": 90, "severity": "CRITICAL"},
+        "analysis_completeness": {
+            "ledger_exceptions": [{"reason_code": "partial", "path": "file", "message": "inspect"}]
+        },
+    }
+    if field == "name":
+        entry["skill"][field] = payload
+    else:
+        entry["analysis_completeness"]["ledger_exceptions"][0][field] = payload
+
+    rendered = formatter([entry])
+
+    assert expected in rendered
+    assert "90/100" in rendered
+    assert "CRITICAL" in rendered
+    assert not any(character in rendered for character in ("\x1b", "\x00", "\r", "\u202e"))
+
+
+def test_terminal_batch_breakdown_fields_are_literal():
+    entries = [
+        {"skill": {"name": "one", "source_group": "[/bad]", "language": "[bold]x[/bold]"}},
+        {"skill": {"name": "two", "source_group": "other", "language": "en"}},
+    ]
+    rendered = _format_terminal(entries)
+    assert "[/bad]" in rendered
+    assert "[bold]x[/bold]" in rendered

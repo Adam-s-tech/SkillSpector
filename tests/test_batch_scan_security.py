@@ -207,3 +207,50 @@ def test_cli_warns_using_detected_language(
     assert "WARNING:" in output_text
     assert "(zh) scanned with --no-llm." in output_text
     assert observed["calls"] == []
+
+
+@pytest.mark.parametrize("rich_available", [True, False])
+@pytest.mark.parametrize("has_error", [True, False])
+def test_cli_prints_literal_skill_names_and_errors(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    rich_available,
+    has_error,
+) -> None:
+    import builtins
+
+    if not rich_available:
+        original_import = builtins.__import__
+
+        def without_rich(name, *args, **kwargs):
+            if name == "rich.console":
+                raise ImportError("Rich unavailable")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", without_rich)
+    name = "[/bad]\n\x1b[31mchild"
+    entry = {
+        "skill": {"name": name, "language": "en"},
+        "risk_assessment": {"score": 90, "severity": "CRITICAL"},
+        "issues": [],
+    }
+    error = "[/bad]\n\x1b[31mfailed" if has_error else None
+    if error:
+        entry["error"] = error
+    monkeypatch.setattr(batch_scan, "discover_skills", lambda root: [tmp_path / name])
+    monkeypatch.setattr(batch_scan, "run_one", lambda *args, **kwargs: (entry, error))
+    monkeypatch.setattr(batch_scan, "create_api_key_pool_from_env", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["batch_scan", str(tmp_path), "--no-llm", "--workers", "1"])
+
+    with pytest.raises(SystemExit) as exited:
+        batch_scan._main_impl()
+
+    assert exited.value.code == (2 if has_error else 1)
+    rendered = capsys.readouterr().out
+    assert "[/bad] [31mchild" in rendered
+    assert "\x1b" not in rendered
+    if has_error:
+        assert "[/bad] [31mfailed" in rendered
+    else:
+        assert "90/100 CRITICAL" in rendered
