@@ -217,6 +217,8 @@ new scan. Acquisition source and scan timestamp are excluded from comparison.
 while normalized fields match; these are not counted as unchanged. This can
 indicate a change to fields outside the snapshot model, or array reordering in
 the raw record. Package and remote ordering alone is not a normalized field change.
+Entries in `changed` may also contain changes outside the snapshot model; inspect
+the raw record to see those changes.
 Compare reports with the same selection scope: a server absent from the current
 input is reported as removed, which does not prove it was removed from a registry.
 
@@ -252,6 +254,29 @@ directory, SkillSpector excludes that exact file from content analysis so its
 suppression text cannot create findings or enter regenerated fingerprints;
 sibling files remain in normal scan scope.
 
+### Explicit scan scope
+
+For a local directory containing one `SKILL.md` or `skill.md`, repeat `--exclude` to omit
+selected files before content analysis:
+
+```bash
+skillspector scan ./my-skill --exclude 'tests/*' --exclude 'fixtures/*.json'
+```
+
+Patterns are case-sensitive globs matched against the entire relative POSIX path;
+`*` also matches `/`. Quote patterns so your shell does not expand them. This is
+an explicit caller option, not an author-controlled ignore file. Patterns matching
+either manifest name (`SKILL.md` or `skill.md`) are rejected, as are recursive, multi-skill, transitive, registry, and
+non-directory inputs. No-match patterns are still recorded in the report.
+
+Files already outside the scan inventory, such as policy-excluded dependencies,
+retain their existing policy handling and are not counted as caller exclusions.
+Explicitly excluded inventory files remain in the coverage denominator as entirely uninspected. The
+report lists the applied patterns, excluded count and individual skipped paths;
+any matched exclusion makes coverage partial and prevents a `SAFE` recommendation.
+Use `--fail-on-incomplete` when partial scope should fail CI. These exclusions do
+not suppress findings in included files or override existing safety limits.
+
 ### LLM Analysis
 
 For the best results, configure an OpenAI-compatible LLM endpoint for
@@ -286,6 +311,9 @@ prose answer; it recognises the model from the model ID, a geo/global
 inference-profile ID, or a foundation-model / inference-profile ARN. An
 application-inference-profile ARN hides the model, so add that ARN to the
 registry (`SKILLSPECTOR_MODEL_REGISTRY`) with `tool_choice: auto`.
+The `openai_compatible` provider honours the same `tool_choice: auto` entry
+for endpoints that ignore both `response_format` and a forced `tool_choice`
+and answer in prose (for example iFlytek's `spark-x2.5`, which is bundled).
 `SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD=json_schema|function_calling`
 overrides the method for any provider.
 
@@ -662,6 +690,7 @@ Issues (2)
 | `SKILLSPECTOR_COMPACT_PROMPTS` | Opt-in compact line numbering in LLM prompts: numbered lines render as `L1:`, `L2:` instead of zero-padded `L01:`, `L02:`. Accepted truthy values are `1`, `true`, and `yes` (case-insensitive; surrounding whitespace is trimmed). Unset or any other value keeps the default zero-padded format. | Optional |
 | `ANTHROPIC_API_KEY` | Credential for the Anthropic provider (`SKILLSPECTOR_PROVIDER=anthropic`). | Required for LLM analysis when `SKILLSPECTOR_PROVIDER=anthropic` |
 | `ANTHROPIC_BASE_URL` | Override the native Anthropic endpoint (default: `https://api.anthropic.com`). | Optional |
+| `ANTHROPIC_AUTH_SCHEME` | Set to `bearer` to send `ANTHROPIC_API_KEY` as `Authorization: Bearer` instead of `x-api-key`, for gateways exposing the Messages API. | Optional |
 | `ANTHROPIC_PROXY_ENDPOINT_URL` | Full endpoint URL for the Anthropic proxy provider (Vertex-style raw-predict). | Required when `SKILLSPECTOR_PROVIDER=anthropic_proxy` |
 | `ANTHROPIC_PROXY_API_KEY` | Bearer token for the Anthropic proxy provider. | Required when `SKILLSPECTOR_PROVIDER=anthropic_proxy` |
 | `ANTHROPIC_PROXY_API_VERSION` | `anthropic_version` value sent in the request body (default: `vertex-2023-10-16`). | Optional |
@@ -712,10 +741,10 @@ SkillSpector is built to be driven by other tools (CI pipelines, install gates, 
 | Code | Meaning |
 |------|---------|
 | `0` | Scan completed, `risk_score` ≤ 50 (recommendation `SAFE` or `CAUTION`), and no enabled strict gate fired |
-| `1` | Scan completed and either `risk_score` > 50, `--fail-on-findings` found an active finding, or `--fail-on-incomplete` found partial/incomplete analysis |
+| `1` | Scan completed and either `risk_score` > 50, `--fail-on-findings` found an active finding, `--fail-on-incomplete` found partial/incomplete analysis, or `--min-coverage` found coverage below its threshold |
 | `2` | Error (bad input, unreadable source, internal failure) |
 
-> By default, the exit code collapses `SAFE` and `CAUTION` into `0`. Use `--fail-on-findings` to gate on any active finding, `--fail-on-incomplete` to gate on incomplete coverage, or read the JSON `recommendation` field for custom policy.
+> By default, the exit code collapses `SAFE` and `CAUTION` into `0`. Use `--fail-on-findings` to gate on any active finding, `--fail-on-incomplete` to gate on incomplete coverage, `--min-coverage PERCENT` to gate on a coverage floor, or read the JSON `recommendation` field for custom policy.
 
 ### Machine-readable output
 
@@ -781,7 +810,13 @@ The top-level shape is (this example shows a full LLM-backed scan; with `--no-ll
   pricing contract.
 - The full per-issue shape is defined by `Finding.to_dict()` in [models.py](src/skillspector/models.py); rely on the fields above and treat any additional fields as best-effort.
 
-For CI/IDE tooling, `--format sarif` emits SARIF 2.1.0.
+For CI/IDE tooling, `--format sarif` emits SARIF 2.1.0. Each result carries its
+security severity; rule descriptors carry a score only when all of their results
+share that severity. Mixed-severity rules remain unannotated, so consumers that
+read only rule-level severity cannot distinguish their result severities.
+Recursive scans chain each percent-encoded skill-directory URI through an
+absolute scan-root file URI. External dependency locations retain their source
+provenance instead of being rebased into the local skill directory.
 
 ### Recommended gate mapping
 
