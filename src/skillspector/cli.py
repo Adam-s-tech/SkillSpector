@@ -22,6 +22,7 @@ No business logic; workflow lives in the graph.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import warnings
@@ -33,6 +34,7 @@ from hashlib import sha256
 from pathlib import Path
 from time import monotonic
 from typing import Annotated, cast
+from urllib.parse import quote
 
 import typer
 from langchain_core.runnables import RunnableConfig
@@ -369,6 +371,31 @@ def _write_result(
             print(report_body)
 
 
+def _validate_min_coverage(value: float | None) -> float | None:
+    """Accept only finite percentage thresholds in the CLI's supported range."""
+    if value is not None and (not math.isfinite(value) or not 0 <= value <= 100):
+        raise typer.BadParameter("must be a finite number between 0 and 100")
+    return value
+
+
+def _coverage_below_threshold(result: dict[str, object], threshold: float | None) -> bool:
+    """Compare finalized canonical coverage with the requested threshold."""
+    if threshold is None:
+        return False
+    completeness = result.get("analysis_completeness")
+    coverage = completeness.get("coverage_percent") if isinstance(completeness, dict) else None
+    if isinstance(coverage, bool) or not isinstance(coverage, (int, float)):
+        return True
+    if not math.isfinite(coverage):
+        return True
+    return coverage < threshold
+
+
+def _omissions_fail_threshold(omitted_skills: int, threshold: float | None) -> bool:
+    """Known omitted skills leave coverage below any positive threshold."""
+    return bool(omitted_skills) and threshold is not None and threshold > 0
+
+
 def _recursive_json_payload(result: dict[str, object]) -> dict[str, object] | None:
     """Return parsed report_body when it is valid JSON object text."""
     raw_report_body = result.get("report_body")
@@ -539,6 +566,14 @@ def scan(
             help="Exit 1 when relevant analysis is partial or incomplete.",
         ),
     ] = False,
+    min_coverage: Annotated[
+        float | None,
+        typer.Option(
+            "--min-coverage",
+            help="Exit 1 when canonical analysis coverage is below this percentage (0-100).",
+            callback=_validate_min_coverage,
+        ),
+    ] = None,
     fail_on_findings: Annotated[
         bool,
         typer.Option(
@@ -561,6 +596,13 @@ def scan(
             help="Scan an MCP Registry payload or URL instead of a skill.",
         ),
     ] = False,
+    mcp_registry_compare: Annotated[
+        Path | None,
+        typer.Option(
+            "--mcp-registry-compare",
+            help="Compare registry snapshots with a previous local JSON report; requires --mcp-registry.",
+        ),
+    ] = None,
 ) -> None:
     """
     Scan a skill for security vulnerabilities.
@@ -604,6 +646,9 @@ def scan(
         gemini_cli, and opencode_cli use their CLI's existing local
         authentication session.
     """
+    if mcp_registry_compare is not None and not mcp_registry:
+        err_console.print("[red]Error:[/red] --mcp-registry-compare requires --mcp-registry")
+        raise typer.Exit(code=2)
     if exclude and (
         recursive
         or transitive_enabled
@@ -618,10 +663,17 @@ def scan(
         raise typer.Exit(code=2)
 
     if mcp_registry:
-        if recursive or baseline is not None or show_suppressed or yara_rules_dir is not None:
+        if (
+            recursive
+            or baseline is not None
+            or show_suppressed
+            or yara_rules_dir is not None
+            or min_coverage is not None
+        ):
             err_console.print(
                 "[red]Error:[/red] --mcp-registry cannot be combined with "
-                "--recursive, --baseline, --show-suppressed, or --yara-rules-dir"
+                "--recursive, --baseline, --show-suppressed, --yara-rules-dir, "
+                "or --min-coverage"
             )
             raise typer.Exit(code=2)
         if format != FormatChoice.json:
@@ -630,7 +682,11 @@ def scan(
             )
             raise typer.Exit(code=2)
         try:
-            result = scan_registry(input_path)
+            result = (
+                scan_registry(input_path, compare_path=mcp_registry_compare)
+                if mcp_registry_compare is not None
+                else scan_registry(input_path)
+            )
             report = json.dumps(result, indent=2)
             if output:
                 output.write_text(report, encoding="utf-8")
@@ -679,8 +735,10 @@ def scan(
     discovery_console = (
         err_console if output is None and format is not FormatChoice.terminal else console
     )
+    recursive_omitted_skills = 0
     if recursive and resolved_path.is_dir():
         detection = detect_skills(resolved_path)
+        recursive_omitted_skills = detection.omitted_symlink_entries
         if not detection.complete:
             pre_scan_ledger_events = _multi_skill_limitation_events(detection)
             err_console.print(
@@ -713,6 +771,7 @@ def scan(
                     verbose=verbose,
                     fail_on_incomplete=fail_on_incomplete,
                     fail_on_findings=fail_on_findings,
+                    min_coverage=min_coverage,
                 )
             except typer.Exit:
                 raise
@@ -803,6 +862,10 @@ def scan(
         if fail_on_incomplete and not is_complete:
             raise typer.Exit(code=1)
         if fail_on_findings and effective_findings(result):
+            raise typer.Exit(code=1)
+        if _coverage_below_threshold(result, min_coverage) or _omissions_fail_threshold(
+            recursive_omitted_skills, min_coverage
+        ):
             raise typer.Exit(code=1)
         if (result.get("risk_score") or 0) > RISK_THRESHOLD:
             raise typer.Exit(code=1)
@@ -2650,6 +2713,11 @@ def _multi_skill_text_summary(
     return f"{risk}\n\n{_multi_skill_text_completeness(completeness)}"
 
 
+# uriBaseId key used to scope recursive child-run result URIs to their own
+# skill directory (SARIF 2.1.0 section 3.14.14).
+_RECURSIVE_SARIF_URI_BASE_ID = "SKILLROOT"
+
+
 def _multi_skill_sarif_report(
     processed_skills: list[SkillDirectory],
     results: list[dict[str, object]],
@@ -2679,6 +2747,43 @@ def _multi_skill_sarif_report(
                 "path": skill.relative_path,
             }
             run["properties"] = run_properties
+            # SARIF 2.1.0 sections 3.4.4 and 3.14.14: scope each child run's
+            # skill-relative URIs to its own skill directory so results from
+            # different skills stop collapsing onto one repo-root-relative
+            # path. Single-skill output is untouched: only recursive merges
+            # set uriBaseId.
+            relative = quote(skill.path.name, safe="")
+            if relative:
+                for result in run.get("results", []):
+                    if not isinstance(result, dict):
+                        continue
+                    for location in result.get("locations", []):
+                        physical = (
+                            location.get("physicalLocation") if isinstance(location, dict) else None
+                        )
+                        artifact = (
+                            physical.get("artifactLocation") if isinstance(physical, dict) else None
+                        )
+                        if isinstance(artifact, dict):
+                            provenance = artifact.get("properties")
+                            if isinstance(provenance, dict) and any(
+                                key in provenance
+                                for key in (
+                                    "sourceIdentity",
+                                    "sourceUrl",
+                                    "sourceDigest",
+                                    "transitiveDepth",
+                                )
+                            ):
+                                continue
+                            artifact["uriBaseId"] = _RECURSIVE_SARIF_URI_BASE_ID
+                run["originalUriBaseIds"] = {
+                    "SCANROOT": {"uri": skill.path.parent.resolve().as_uri() + "/"},
+                    _RECURSIVE_SARIF_URI_BASE_ID: {
+                        "uri": f"{relative}/",
+                        "uriBaseId": "SCANROOT",
+                    },
+                }
             runs.append(run)
 
     invocation_properties: dict[str, object] = {"analysisCompleteness": completeness}
@@ -2751,6 +2856,7 @@ def _scan_multi_skill(
     yara_dir: str | None = None,
     verbose: bool = False,
     fail_on_incomplete: bool = False,
+    min_coverage: float | None = None,
     fail_on_findings: bool = False,
     **legacy_kwargs: object,
 ) -> None:
@@ -2793,6 +2899,7 @@ def _scan_multi_skill(
     complete_skill_count = 0
     partial_skill_count = 0
     failed_skill_count = 0
+    coverage_failed = False
 
     for i, skill in enumerate(skills, 1):
         if i > _MULTI_SKILL_MAX_SKILLS:
@@ -2839,6 +2946,8 @@ def _scan_multi_skill(
                 source_local_only=skill.local_only,
             )
             child_failed = result.get("execution_successful") is False
+            if not child_failed and _coverage_below_threshold(result, min_coverage):
+                coverage_failed = True
             completeness_value = result.get("analysis_completeness")
             child_partial = (
                 not child_failed
@@ -2944,6 +3053,8 @@ def _scan_multi_skill(
         aggregate_limitations.append(
             f"{unscanned_skill_count} recursive skill(s) unscanned after an aggregate limit"
         )
+    if _omissions_fail_threshold(skills_omitted_total, min_coverage):
+        coverage_failed = True
     aggregate_limitations = list(dict.fromkeys(aggregate_limitations))[:256]
     aggregate_completeness = _multi_skill_analysis_completeness(
         total_skills=len(skills) + omitted_symlink_entry_count,
@@ -3179,6 +3290,8 @@ def _scan_multi_skill(
     if fail_on_incomplete and analysis_incomplete:
         raise typer.Exit(code=1)
     if fail_on_findings and has_findings:
+        raise typer.Exit(code=1)
+    if coverage_failed:
         raise typer.Exit(code=1)
     if max_score > RISK_THRESHOLD:
         raise typer.Exit(code=1)

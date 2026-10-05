@@ -196,6 +196,38 @@ See the [contrib guide](contrib/batch_scan/docs/) for details.
 > contribute a more universal backend (Ollama, vLLM, or a different provider),
 > PRs are very welcome.
 
+### Comparing MCP Registry snapshots
+
+Start with raw registry payload captures (`registry-before.json` and
+`registry-after.json`). Save a scan report as `previous.json`, then compare a
+later scan against that generated local report:
+
+```bash
+skillspector scan registry-before.json --mcp-registry --format json --output previous.json
+skillspector scan registry-after.json --mcp-registry --format json \
+  --mcp-registry-compare previous.json --output compared.json
+```
+
+The optional `comparison` object lists added and removed server identities,
+changed normalized fields with their previous and current values, and an
+`unchanged_count`. Identity is the server name and version, so a new version
+appears as an addition and the old version as a removal if it is absent from the
+new scan. Acquisition source and scan timestamp are excluded from comparison.
+`unmodeled_changes` lists same-identity records whose raw-record hash changed
+while normalized fields match; these are not counted as unchanged. This can
+indicate a change to fields outside the snapshot model, or array reordering in
+the raw record. Package and remote ordering alone is not a normalized field change.
+Entries in `changed` may also contain changes outside the snapshot model; inspect
+the raw record to see those changes.
+Compare reports with the same selection scope: a server absent from the current
+input is reported as removed, which does not prove it was removed from a registry.
+
+The comparison file must be a local report produced by this registry mode with
+valid normalized snapshots. Malformed, oversized or duplicate server identities
+are rejected. This option requires `--mcp-registry` and is separate from the
+finding-suppression `--baseline`: it never suppresses findings or changes risk
+scores, and it does not fetch or execute listed server endpoints.
+
 ### Suppressing False Positives (baseline)
 
 Suppress known/accepted findings so the risk score reflects only un-triaged
@@ -709,10 +741,10 @@ SkillSpector is built to be driven by other tools (CI pipelines, install gates, 
 | Code | Meaning |
 |------|---------|
 | `0` | Scan completed, `risk_score` ≤ 50 (recommendation `SAFE` or `CAUTION`), and no enabled strict gate fired |
-| `1` | Scan completed and either `risk_score` > 50, `--fail-on-findings` found an active finding, or `--fail-on-incomplete` found partial/incomplete analysis |
+| `1` | Scan completed and either `risk_score` > 50, `--fail-on-findings` found an active finding, `--fail-on-incomplete` found partial/incomplete analysis, or `--min-coverage` found coverage below its threshold |
 | `2` | Error (bad input, unreadable source, internal failure) |
 
-> By default, the exit code collapses `SAFE` and `CAUTION` into `0`. Use `--fail-on-findings` to gate on any active finding, `--fail-on-incomplete` to gate on incomplete coverage, or read the JSON `recommendation` field for custom policy.
+> By default, the exit code collapses `SAFE` and `CAUTION` into `0`. Use `--fail-on-findings` to gate on any active finding, `--fail-on-incomplete` to gate on incomplete coverage, `--min-coverage PERCENT` to gate on a coverage floor, or read the JSON `recommendation` field for custom policy.
 
 ### Machine-readable output
 
@@ -778,7 +810,13 @@ The top-level shape is (this example shows a full LLM-backed scan; with `--no-ll
   pricing contract.
 - The full per-issue shape is defined by `Finding.to_dict()` in [models.py](src/skillspector/models.py); rely on the fields above and treat any additional fields as best-effort.
 
-For CI/IDE tooling, `--format sarif` emits SARIF 2.1.0.
+For CI/IDE tooling, `--format sarif` emits SARIF 2.1.0. Each result carries its
+security severity; rule descriptors carry a score only when all of their results
+share that severity. Mixed-severity rules remain unannotated, so consumers that
+read only rule-level severity cannot distinguish their result severities.
+Recursive scans chain each percent-encoded skill-directory URI through an
+absolute scan-root file URI. External dependency locations retain their source
+provenance instead of being rebased into the local skill directory.
 
 ### Recommended gate mapping
 
