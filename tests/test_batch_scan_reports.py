@@ -96,7 +96,8 @@ def test_batch_markdown_treats_scan_content_as_literal_text(payload: str, field:
     for token in tokens:
         assert token.type not in {"html_block", "fence", "code_block"}
         assert not any(
-            child.type in {"html_inline", "link_open", "image", "s_open"} for child in token.children or []
+            child.type in {"html_inline", "link_open", "image", "s_open"}
+            for child in token.children or []
         )
     assert entry == original
     assert json.loads(_format_json([entry]))["skills"][0]["skill"]["name"] == entry["skill"]["name"]
