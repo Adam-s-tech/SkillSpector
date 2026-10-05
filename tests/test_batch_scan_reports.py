@@ -96,3 +96,21 @@ def test_batch_markdown_treats_scan_content_as_literal_text(payload: str, field:
         )
     assert entry == original
     assert json.loads(_format_json([entry]))["skills"][0]["skill"]["name"] == entry["skill"]["name"]
+
+
+@pytest.mark.parametrize("value", ["a|b", r"a\|b", "`a`", "a``b`", "<script> & value"])
+@pytest.mark.parametrize("table_cell", [False, True])
+def test_batch_markdown_code_preserves_literal_values(value: str, table_cell: bool) -> None:
+    from contrib.batch_scan.reports import _markdown_code
+
+    source = _markdown_code(value, table_cell=table_cell)
+    if table_cell:
+        source = f"| Path |\n|---|\n| {source} |"
+    tokens = MarkdownIt("commonmark").enable("table").parse(source)
+    code = [
+        child.content
+        for token in tokens
+        for child in token.children or []
+        if child.type == "code_inline"
+    ]
+    assert code == [value]

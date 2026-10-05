@@ -381,9 +381,11 @@ def _markdown_text(value: object) -> str:
     return re.sub(r"([\\`*_{}\[\]()#+.!|>-])", r"\\\1", text)
 
 
-def _markdown_code(value: object) -> str:
+def _markdown_code(value: object, *, table_cell: bool = False) -> str:
     """Quote literal text without allowing code-span or table-cell breakouts."""
-    text = " ".join(str(value).splitlines()).replace("|", "\\|")
+    text = " ".join(str(value).splitlines())
+    if table_cell:
+        text = text.replace("|", "\\|")
     delimiter = "`" * (max((len(run) for run in re.findall(r"`+", text)), default=0) + 1)
     padding = " " if text.startswith(("`", " ")) or text.endswith(("`", " ")) else ""
     return f"{delimiter}{padding}{text}{padding}{delimiter}"
@@ -454,10 +456,10 @@ def _format_markdown(results: list[dict[str, object]]) -> str:
         lang = skill.get("language", "en")
 
         if r.get("error"):
-            lines.append(f"| {_markdown_code(name)} | ERR | ERROR | — | {_markdown_text(lang)} |")
+            lines.append(f"| {_markdown_code(name, table_cell=True)} | ERR | ERROR | — | {_markdown_text(lang)} |")
         else:
             lines.append(
-                f"| {_markdown_code(name)} | {score}/100 | {_markdown_text(sev)} | "
+                f"| {_markdown_code(name, table_cell=True)} | {score}/100 | {_markdown_text(sev)} | "
                 f"{issues} | {_markdown_text(lang)} |"
             )
     lines.append("")
