@@ -47,22 +47,33 @@ export function redact(text: string, env: Env = process.env): string {
       (value): value is string => Boolean(value),
     ),
   )].sort((left, right) => right.length - left.length)
-  const credentialPattern = credentialValues.length
-    ? new RegExp(
-        credentialValues
-          .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-          .join("|"),
-        "g",
-      )
-    : undefined
-  const redacted = credentialPattern ? text.replace(credentialPattern, "[REDACTED]") : text
-  return redacted
-    .replace(/sk-ant-[A-Za-z0-9_-]+/g, "[REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9_-]{6,}\b/g, "[REDACTED]")
-    .replace(
-      /\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY|INFERENCE_KEY))(\s*[:=]\s*["']?)[^"'\s,}]+/g,
-      "$1$2[REDACTED]",
-    )
+  const valuePatterns = credentialValues.map((value) => {
+    const literal = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    // Short values are usually local-provider placeholders. Treat them as
+    // tokens so they cannot change words, JSON fields, or longer credentials.
+    return value.length < 4 ? `(?<![A-Za-z0-9_-])${literal}(?![A-Za-z0-9_-])` : literal
+  })
+  const credentialPattern = new RegExp([
+    "sk-ant-[A-Za-z0-9_-]+",
+    "\\bsk-[A-Za-z0-9_-]{6,}\\b",
+    /\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY|INFERENCE_KEY)\s*[:=]\s*["']?)[^"'\s,}]+/.source,
+    ...valuePatterns,
+  ].join("|"), "g")
+  // One pass keeps shorter configured values from splitting a key-shaped
+  // token or rewriting the replacement marker from an earlier match.
+  const scrub = (value: string): string => value.replace(
+    credentialPattern,
+    (_match, assignmentPrefix: string | undefined) => `${assignmentPrefix ?? ""}[REDACTED]`,
+  )
+  try {
+    const report = JSON.parse(text)
+    if (report === null || typeof report !== "object") return scrub(text)
+    // Preserve JSON numbers and booleans, including a score equal to a short
+    // placeholder. Credentials inside JSON strings still receive full scrubbing.
+    return text.replace(/"(?:[^"\\]|\\.)*"/g, (token) => JSON.stringify(scrub(JSON.parse(token))))
+  } catch {
+    return scrub(text)
+  }
 }
 
 export function isScpGitTarget(target: string): boolean {

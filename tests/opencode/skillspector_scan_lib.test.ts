@@ -96,6 +96,32 @@ describe("redact", () => {
     }
   })
 
+  it("redacts whole key-shaped tokens before short or overlapping configured values", () => {
+    for (const value of ["x", "Q7wE"]) {
+      assert.equal(redact(
+        "sk-proj-Q7wErTyxUiOp9AsDfGhJkL sk-ant-Q7wErTyxUiOp9AsDfGhJkL OPENAI_API_KEY=Q7wErTyxUiOp",
+        { OPENAI_API_KEY: value },
+      ), "[REDACTED] [REDACTED] OPENAI_API_KEY=[REDACTED]")
+    }
+  })
+
+  it("keeps JSON metadata readable and parseable with one-character placeholders", () => {
+    for (const value of ["1", "e", "x"]) {
+      const report = {
+        risk_score: 12,
+        start_line: 1,
+        safe_to_install: true,
+        severity: "medium",
+        code_snippet: `credential ${value} and sk-proj-Q7wErTyxUiOp9AsDfGhJkL`,
+      }
+      assert.deepEqual(JSON.parse(redact(JSON.stringify(report), { OPENAI_API_KEY: value })), {
+        ...report,
+        code_snippet: "credential [REDACTED] and [REDACTED]",
+      })
+    }
+    assert.equal(redact("example xyz x", { OPENAI_API_KEY: "x" }), "example xyz [REDACTED]")
+  })
+
   it("ignores empty and unset credentials without matching every output position", () => {
     assert.equal(redact("ordinary output", {
       OPENAI_API_KEY: "",
