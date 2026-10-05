@@ -208,7 +208,9 @@ def _decoded_literal_xor_calls(content: str) -> list[tuple[int, str]]:
         r"^def\s+(?P<name>[A-Za-z_]\w*)\([^)]*\):(?P<body>(?:\n[ \t]+.*)+)",
         re.MULTILINE,
     )
-    key_pattern = re.compile(r"\b\w+\s*=\s*b(['\"])(?P<key>(?:\\.|[^'\"])*)\1")
+    # A backslash belongs only to an escape, so a missing closing quote cannot
+    # explore exponentially many partitions of a run of backslashes.
+    key_pattern = re.compile(r"\b\w+\s*=\s*b(['\"])(?P<key>(?:\\[\s\S]|[^'\"\\])*)\1")
     decoded: list[tuple[int, str]] = []
     for function in function_pattern.finditer(content):
         body = function.group("body")

