@@ -9,6 +9,7 @@ import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSyn
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
@@ -77,10 +78,13 @@ test("uses installed absolute executable and preserves scan arguments without ou
 test("redacts long scanner output without retrying every word character", { timeout: 5000 }, async (t) => {
   const ctx = await setup(t, () => ({
     code: 0,
-    stdout: "A".repeat(1_000_000),
-    stderr: "B".repeat(1_000_000),
+    stdout: "A".repeat(100_000),
+    stderr: "B".repeat(100_000),
   }));
+  const started = performance.now();
   const result = await ctx.scan();
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 1000, `redaction took ${elapsed.toFixed(1)} ms`);
   assert.equal(result.details.stdoutTruncated, true);
   assert.equal(result.details.stderrTruncated, true);
   assert.ok(result.content[0].text.length < 19_000);
