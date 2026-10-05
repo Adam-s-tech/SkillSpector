@@ -276,8 +276,8 @@ describe("formatExecError", () => {
   it("redacts short credentials from every failure output path before truncation", () => {
     for (const value of ["7", "7x", "7xy"]) {
       const env = { OPENAI_API_KEY: value }
-      const stdout = `${"o".repeat(MAX_STDOUT - 1)}${value} suffix`
-      const stderr = `${"e".repeat(MAX_STDERR - 1)}${value} suffix`
+      const stdout = `${"o".repeat(MAX_STDOUT - 2)} ${value} suffix`
+      const stderr = `${"e".repeat(MAX_STDERR - 2)} ${value} suffix`
       for (const failure of [
         { code: 1, stdout, stderr },
         { code: 2, stdout, stderr },
@@ -320,8 +320,8 @@ describe("formatSuccess", () => {
     for (const value of ["7", "7x", "7xy"]) {
       const out = formatSuccess(
         undefined,
-        `${"o".repeat(MAX_STDOUT - 1)}${value} suffix`,
-        `${"e".repeat(MAX_STDERR - 1)}${value} suffix`,
+        `${"o".repeat(MAX_STDOUT - 2)} ${value} suffix`,
+        `${"e".repeat(MAX_STDERR - 2)} ${value} suffix`,
         { OPENAI_API_KEY: value },
       )
       assert.ok(!out.includes("7"))
