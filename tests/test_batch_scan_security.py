@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -277,10 +278,10 @@ def test_cli_prints_literal_skill_names_and_errors(
         assert "90/100 CRITICAL" in rendered
 
 
-def _stalled_scan_process(skill_dir, root, result_path, options):
+def _stalled_scan_process(skill_dir, root, result_path, options, started):
     # Spawn imports a fresh module, so use the real worker setup around the stall.
     batch_scan._scan_skill = _stalled_scan
-    batch_scan._scan_skill_process(skill_dir, root, result_path, options)
+    batch_scan._scan_skill_process(skill_dir, root, result_path, options, started)
 
 
 def _stalled_scan(skill_dir, root, **options):
@@ -293,9 +294,10 @@ def _stalled_scan(skill_dir, root, **options):
     time.sleep(120)
 
 
-def _successful_scan_process(skill_dir, root, result_path, options):
+def _successful_scan_process(skill_dir, root, result_path, options, started):
     if os.name == "posix":
         os.setsid()
+    started.set()
     result_path.write_text(json.dumps([{"skill": {"name": skill_dir.name}}, None, skill_dir.name]))
 
 
@@ -305,17 +307,18 @@ def test_worker_timeout_kills_scan_and_releases_pool_capacity(tmp_path, monkeypa
     with batch_scan._PoolManager(ctx=multiprocessing.get_context("spawn")) as manager:
         pool = manager.create_pool(1)
         started = time.monotonic()
-        with pytest.raises(TimeoutError, match="exceeded"):
-            batch_scan._scan_skill_bounded(tmp_path, tmp_path, api_pool=pool, timeout=5)
-        assert time.monotonic() - started < 12
+        with pytest.raises(TimeoutError, match="scan timed out"):
+            batch_scan._scan_skill_bounded(
+                tmp_path, tmp_path, api_pool=pool, timeout=5, startup_timeout=20
+            )
+        assert time.monotonic() - started < 35
         assert pool.snapshot()["active_requests"] == 0
         assert pool.snapshot()["total_requests_served"] == 1
         worker_pid, child_pid, temporary = json.loads((tmp_path / "started.json").read_text())
         assert not Path(temporary).exists()
         assert worker_pid not in {child.pid for child in multiprocessing.active_children()}
-        if sys.platform == "linux":
-            child_stat = Path(f"/proc/{child_pid}/stat")
-            assert not child_stat.exists() or child_stat.read_text().split()[2] == "Z"
+        if os.name == "posix":
+            _assert_process_stopped(child_pid)
         monkeypatch.setattr(batch_scan, "_scan_skill_process", _successful_scan_process)
         group_signals = []
         if os.name == "posix":
@@ -347,3 +350,119 @@ def test_process_pool_shares_slots_and_cancels_waiting_owner(monkeypatch):
         assert pool.snapshot()["active_requests"] == 0
         with pytest.raises(RuntimeError, match="stopped"):
             pool.try_acquire(owner="running")
+
+
+def _assert_process_stopped(pid):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        if sys.platform == "linux":
+            # Container PID 1 may leave a killed orphan awaiting reaping.
+            status = Path(f"/proc/{pid}/stat")
+            if not status.exists() or status.read_text().split()[2] == "Z":
+                return
+        time.sleep(0.05)
+    pytest.fail(f"process {pid} remained alive")
+
+
+def _slow_start_process(skill_dir, root, result_path, options, started):
+    time.sleep(0.3)
+    _successful_scan_process(skill_dir, root, result_path, options, started)
+
+
+def _never_started_process(skill_dir, root, result_path, options, started):
+    time.sleep(120)
+
+
+def test_worker_startup_has_a_separate_bound(tmp_path, monkeypatch):
+    monkeypatch.setattr(batch_scan, "_scan_skill_process", _slow_start_process)
+    entry, error, name = batch_scan._scan_skill_bounded(
+        tmp_path, tmp_path, timeout=0.1, startup_timeout=20
+    )
+    assert entry["skill"]["name"] == name == tmp_path.name
+    assert error is None
+    monkeypatch.setattr(batch_scan, "_scan_skill_process", _never_started_process)
+    with pytest.raises(TimeoutError, match="startup timed out"):
+        batch_scan._scan_skill_bounded(tmp_path, tmp_path, timeout=10, startup_timeout=0.2)
+
+
+def _mixed_scan_process(skill_dir, root, result_path, options, started):
+    if skill_dir.name == "stalled":
+        batch_scan._scan_skill = _stalled_scan
+    elif skill_dir.name == "crashed":
+        os._exit(7)
+    batch_scan._scan_skill_process(skill_dir, root, result_path, options, started)
+
+
+@pytest.mark.parametrize("failed_name", ["stalled", "crashed"])
+def test_cli_reports_failed_workers_with_completed_skills(tmp_path, monkeypatch, failed_name):
+    failed = tmp_path / failed_name
+    normal = tmp_path / "normal"
+    for skill in (failed, normal):
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(f"---\nname: {skill.name}\n---\nA helpful skill.\n")
+    output = tmp_path / "report.json"
+    monkeypatch.setattr(batch_scan, "_scan_skill_process", _mixed_scan_process)
+    monkeypatch.setattr(
+        batch_scan, "_scan_skill_bounded",
+        partial(batch_scan._scan_skill_bounded, timeout=3, startup_timeout=20),
+    )
+    monkeypatch.setattr(batch_scan, "create_api_key_pool_from_env", lambda: None)
+    monkeypatch.setattr(
+        sys, "argv", ["batch_scan", str(tmp_path), "--no-llm", "--workers", "2", "-f", "json", "-o", str(output)]
+    )
+    with pytest.raises(SystemExit) as exited:
+        batch_scan._main_impl()
+    assert exited.value.code == 2
+    report = json.loads(output.read_text())
+    assert report["batch"]["total_skills"] == 2
+    entries = {entry["skill"]["name"]: entry for entry in report["skills"]}
+    assert set(entries) == {failed_name, "normal"}
+    assert entries[failed_name]["risk_assessment"]["severity"] == "ERROR"
+    expected = "scan timed out after 3s" if failed_name == "stalled" else "worker exited with code 7"
+    assert expected in entries[failed_name]["error"]
+    assert entries[failed_name]["execution_successful"] is False
+    assert not entries["normal"].get("error")
+
+
+def _abandoned_supervisor(skill_dir):
+    batch_scan._scan_skill_process = _stalled_scan_process
+    batch_scan._scan_skill_bounded(skill_dir, skill_dir, timeout=120)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group cleanup")
+def test_worker_stops_descendants_when_supervisor_dies(tmp_path):
+    supervisor = multiprocessing.get_context("spawn").Process(
+        target=_abandoned_supervisor, args=(tmp_path,)
+    )
+    supervisor.start()
+    try:
+        marker = tmp_path / "started.json"
+        deadline = time.monotonic() + 25
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert marker.exists(), "worker did not start"
+        worker_pid, child_pid, temporary = json.loads(marker.read_text())
+        supervisor.kill()
+        supervisor.join(5)
+        assert not supervisor.is_alive()
+        _assert_process_stopped(worker_pid)
+        _assert_process_stopped(child_pid)
+        assert not Path(temporary).parent.exists()
+    finally:
+        if supervisor.is_alive():
+            supervisor.kill()
+        supervisor.join(5)
+        supervisor.close()
+
+
+def test_scan_forwards_verbose_logging(batch_skill, monkeypatch):
+    skill, _ = batch_skill
+    _mock_scan(monkeypatch)
+    levels = []
+    monkeypatch.setattr(batch_scan, "set_level", levels.append)
+    batch_scan._scan_skill(skill, skill.parent, use_llm=False, lang="en", require_llm=False, verbose=True)
+    assert levels == ["DEBUG"]
