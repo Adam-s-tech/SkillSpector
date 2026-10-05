@@ -74,6 +74,34 @@ test("uses installed absolute executable and preserves scan arguments without ou
   assert.equal(ctx.calls[0].options.cwd, ctx.workspace);
 });
 
+test("redacts long scanner output without retrying every word character", { timeout: 5000 }, async (t) => {
+  const ctx = await setup(t, () => ({
+    code: 0,
+    stdout: "A".repeat(1_000_000),
+    stderr: "B".repeat(1_000_000),
+  }));
+  const result = await ctx.scan();
+  assert.equal(result.details.stdoutTruncated, true);
+  assert.equal(result.details.stderrTruncated, true);
+  assert.ok(result.content[0].text.length < 19_000);
+});
+
+test("redacts complete secrets before truncating at display boundaries", async (t) => {
+  const ctx = await setup(t, () => ({
+    code: 0,
+    stdout: " ".repeat(11_990) + "sk-" + "x".repeat(32),
+    stderr: "NPM_TOKEN=synthetic-token\nCUSTOM_API_KEY: synthetic-key\napi_key=lower-key",
+  }));
+  const result = await ctx.scan();
+  const text = result.content[0].text;
+  for (const secret of ["sk-", "synthetic-token", "synthetic-key", "lower-key"]) {
+    assert.equal(text.includes(secret), false);
+  }
+  assert.match(text, /NPM_TOKEN=\[REDACTED\]/);
+  assert.match(text, /CUSTOM_API_KEY: \[REDACTED\]/);
+  assert.match(text, /api_key=\[REDACTED\]/);
+});
+
 test("finds the Windows virtualenv executable without a PATH fallback", async (t) => {
   const ctx = await setup(t);
   rmSync(ctx.bin);
