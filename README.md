@@ -402,8 +402,8 @@ skillspector scan ./my-skill/ --no-llm
 ### MCP Server
 
 Run SkillSpector as a [Model Context Protocol](https://modelcontextprotocol.io)
-server so any MCP-capable agent (Claude Code, Codex CLI, Gemini CLI) or remote
-runtime can call scanning as a tool and **gate skill/MCP installs on the
+server so local MCP-capable agents (Claude Code, Codex CLI, Gemini CLI)
+can call scanning as a tool and **gate skill/MCP installs on the
 result** — turning SkillSpector into a runtime guardrail instead of an
 out-of-band audit step.
 

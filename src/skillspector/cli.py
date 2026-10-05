@@ -3314,7 +3314,7 @@ def mcp(
     Run SkillSpector as an MCP server.
 
     Exposes a single tool, ``scan_skill``, so any MCP-capable agent (Claude Code,
-    Codex CLI, Gemini CLI) or remote runtime can scan a skill and gate installs
+    Codex CLI, Gemini CLI) can scan a skill locally and gate installs
     on the verdict.
 
     Requires the optional mcp extra. Reinstall the GitHub tool package with

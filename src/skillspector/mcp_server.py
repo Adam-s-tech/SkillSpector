@@ -15,8 +15,8 @@
 
 """MCP server exposing SkillSpector scanning as an agent-callable tool.
 
-This lets any MCP-capable agent (Claude Code, Codex CLI, Gemini CLI) or remote
-runtime call ``scan_skill`` and gate skill/MCP installs on the verdict, turning
+This lets local MCP-capable agents (Claude Code, Codex CLI, Gemini CLI) call
+``scan_skill`` and gate skill/MCP installs on the verdict, turning
 SkillSpector from an out-of-band audit tool into a runtime guardrail.
 
 The scan core (:func:`run_scan`) is deliberately independent of the ``mcp`` SDK
@@ -286,7 +286,9 @@ def run(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8000) -> 
         # Never resolve caller-selected names or expose this unauthenticated server.
         host = "127.0.0.1" if host.lower() == "localhost" else host
         try:
-            loopback = ip_address(host).is_loopback
+            host = str(ip_address(host))
+            # FastMCP permits these Host headers, not the full IPv4 loopback range.
+            loopback = host in {"127.0.0.1", "::1"}
         except ValueError:
             loopback = False
         if not loopback:

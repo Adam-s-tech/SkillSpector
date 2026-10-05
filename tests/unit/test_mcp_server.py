@@ -1156,6 +1156,8 @@ def test_run_passes_transport_local_target_policy(
         "example.com",
         "127.0.0.1.example.com",
         "127.1",
+        "127.3.2.1",
+        "::1%lo",
         "2130706433",
         "",
     ],
@@ -1172,7 +1174,7 @@ def test_http_rejects_non_loopback_before_constructing_server(host, monkeypatch)
     "host, bound",
     [
         ("127.0.0.1", "127.0.0.1"),
-        ("127.3.2.1", "127.3.2.1"),
+        ("0:0:0:0:0:0:0:1", "::1"),
         ("::1", "::1"),
         ("localhost", "127.0.0.1"),
         ("LOCALHOST", "127.0.0.1"),
