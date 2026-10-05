@@ -37,6 +37,7 @@ def test_json_marks_error_entries_as_unsuccessful() -> None:
         "` `` ``` <script>alert(1)</script> [safe](https://example.invalid)",
         "\\| **safe** &lt;!--",
         " leading and trailing spaces ",
+        "~~hidden~~",
         "\x1b[2J\x00\u202eLOW\u202c\x9b\u2066safe\u2069",
     ],
 )
@@ -73,7 +74,7 @@ def test_batch_markdown_treats_scan_content_as_literal_text(payload: str, field:
             ]
         },
     }
-    parser = MarkdownIt("commonmark", {"html": True}).enable("table")
+    parser = MarkdownIt("commonmark", {"html": True}).enable(["table", "strikethrough"])
     original_blocks = [token.type for token in parser.parse(_format_markdown([entry]))]
     if field in {"name", "language"}:
         entry["skill"][field] = payload
@@ -95,7 +96,7 @@ def test_batch_markdown_treats_scan_content_as_literal_text(payload: str, field:
     for token in tokens:
         assert token.type not in {"html_block", "fence", "code_block"}
         assert not any(
-            child.type in {"html_inline", "link_open", "image"} for child in token.children or []
+            child.type in {"html_inline", "link_open", "image", "s_open"} for child in token.children or []
         )
     assert entry == original
     assert json.loads(_format_json([entry]))["skills"][0]["skill"]["name"] == entry["skill"]["name"]
@@ -117,3 +118,9 @@ def test_batch_markdown_code_preserves_literal_values(value: str, table_cell: bo
         if child.type == "code_inline"
     ]
     assert code == [value]
+
+
+def test_batch_markdown_strips_complete_ansi_sequences() -> None:
+    from contrib.batch_scan.reports import _markdown_plain_text
+
+    assert _markdown_plain_text("a\x1b[2Jb\x1b[31mc\x1b[0m") == "abc"

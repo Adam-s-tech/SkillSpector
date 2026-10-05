@@ -30,6 +30,7 @@ from html import escape as escape_html
 from io import StringIO
 
 from skillspector import __version__ as _skillspector_version
+from skillspector.nodes.report import _clean_text
 
 
 def sorted_results(results: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -377,14 +378,15 @@ def _format_json(results: list[dict[str, object]]) -> str:
 
 def _markdown_plain_text(value: object) -> str:
     """Remove display controls and keep a Markdown field on one line."""
-    text = "".join(c for c in str(value) if c.isprintable() or c.isspace())
+    text = _clean_text(str(value)) or ""
+    text = "".join(c for c in text if c.isprintable() or c.isspace())
     return " ".join(text.splitlines())
 
 
 def _markdown_text(value: object) -> str:
     """Keep scan-derived prose within its own Markdown line."""
     text = escape_html(_markdown_plain_text(value), quote=False)
-    return re.sub(r"([\\`*_{}\[\]()#+.!|>-])", r"\\\1", text)
+    return re.sub(r"([\\`*_{}\[\]()#+.!|>~-])", r"\\\1", text)
 
 
 def _markdown_code(value: object, *, table_cell: bool = False) -> str:
