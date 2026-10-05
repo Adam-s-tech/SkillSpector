@@ -93,10 +93,11 @@ def _format_terminal(results: list[dict[str, object]]) -> str:
         from rich.markup import escape
         from rich.panel import Panel
         from rich.table import Table
+        from rich.text import Text
     except ImportError:
         return _format_terminal_plain(results)
 
-    capture = Console(record=True, force_terminal=True, width=80, file=StringIO())
+    capture = Console(record=True, force_terminal=True, width=80, file=StringIO(), emoji=False)
     total = len(results)
 
     critical = _count_sev(results, "CRITICAL")
@@ -182,15 +183,15 @@ def _format_terminal(results: list[dict[str, object]]) -> str:
         lr = _lr_icon(sev, lang)
 
         if r.get("error"):
-            table.add_row(escape(_terminal_text(name)), "-", "ERR", "[red]ERROR[/red]", "—", escape(_terminal_text(lang)))
+            table.add_row(Text(_terminal_text(name)), "-", "ERR", "[red]ERROR[/red]", "—", Text(_terminal_text(lang)))
         else:
             table.add_row(
-                escape(_terminal_text(name)),
+                Text(_terminal_text(name)),
                 lr,
                 f"[{color}]{score}/100[/{color}]",
                 f"[{color}]{escape(_terminal_text(sev))}[/{color}]",
                 str(issues),
-                escape(_terminal_text(lang)),
+                Text(_terminal_text(lang)),
             )
     capture.print(table)
     capture.print()
@@ -239,7 +240,7 @@ def _lr_icon(severity: str, language: str) -> str:
 
 
 def _print_source_breakdown(c, results: list[dict[str, object]]) -> None:
-    from rich.markup import escape
+    from rich.text import Text
 
     group_stats: dict[str, dict[str, int]] = defaultdict(
         lambda: {"total": 0, "CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
@@ -255,19 +256,20 @@ def _print_source_breakdown(c, results: list[dict[str, object]]) -> None:
         c.print("[bold]Source Breakdown:[/bold]")
         for group in sorted(group_stats):
             st = group_stats[group]
-            parts = [f"  {escape(_terminal_text(group)):<30s} {st['total']:>4d} skills"]
+            prefix = Text(f"  {_terminal_text(group):<30s} {st['total']:>4d} skills")
+            parts = []
             if st["CRITICAL"]:
                 parts.append(f"[bold red]{st['CRITICAL']} CRITICAL[/bold red]")
             if st["HIGH"]:
                 parts.append(f"[red]{st['HIGH']} HIGH[/red]")
             if st["MEDIUM"]:
                 parts.append(f"[yellow]{st['MEDIUM']} MEDIUM[/yellow]")
-            c.print(", ".join(parts))
+            c.print(prefix + Text.from_markup((", " + ", ".join(parts)) if parts else ""))
         c.print()
 
 
 def _print_language_breakdown(c, results: list[dict[str, object]]) -> None:
-    from rich.markup import escape
+    from rich.text import Text
 
     lang_stats: dict[str, int] = defaultdict(int)
     lang_non_en: set[str] = set()
@@ -285,15 +287,15 @@ def _print_language_breakdown(c, results: list[dict[str, object]]) -> None:
                 c.print(f"  {lang:<6s} {count:>4d} skills  (static + LLM coverage: full)")
             else:
                 c.print(
-                    f"  {escape(_terminal_text(lang)):<6s} {count:>4d} skills  "
-                    f"[yellow](static: partial, LLM: full)[/yellow]"
+                    Text(f"  {_terminal_text(lang):<6s} {count:>4d} skills  ")
+                    + Text("(static: partial, LLM: full)", style="yellow")
                 )
         c.print()
 
 
 def _terminal_text(value: object) -> str:
     """Keep an untrusted console field on one line without terminal controls."""
-    return " ".join("".join(c for c in str(value) if c.isprintable() or c in "\r\n\t").split())
+    return " ".join("".join(c for c in str(value) if c.isprintable() or c.isspace()).split())
 
 
 def _format_terminal_plain(results: list[dict[str, object]]) -> str:

@@ -229,7 +229,7 @@ def test_cli_prints_literal_skill_names_and_errors(
             return original_import(name, *args, **kwargs)
 
         monkeypatch.setattr(builtins, "__import__", without_rich)
-    name = "[/bad]\n\x1b[31mchild"
+    name = "[/bad]\n\x1b[31mchild:smile:"
     entry = {
         "skill": {"name": name, "language": "en"},
         "risk_assessment": {"score": 90, "severity": "CRITICAL"},
@@ -248,7 +248,7 @@ def test_cli_prints_literal_skill_names_and_errors(
 
     assert exited.value.code == (2 if has_error else 1)
     rendered = capsys.readouterr().out
-    assert "[/bad] [31mchild" in rendered
+    assert "[/bad] [31mchild:smile:" in rendered
     assert "\x1b" not in rendered
     if has_error:
         assert "[/bad] [31mfailed" in rendered

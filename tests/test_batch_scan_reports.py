@@ -130,6 +130,9 @@ def test_batch_markdown_code_preserves_literal_values(value: str, table_cell: bo
     [
         ("[/bad]", "[/bad]"),
         ("[bold]x[/bold]", "[bold]x[/bold]"),
+        ("技能\u3000名称\u00a0x", "技能 名称 x"),
+        ("x:smile:", "x:smile:"),
+        ("tail\\", "tail\\"),
         ("a\r\nb\x1b[31m\x00c\u202ed", "a b[31mcd"),
     ],
 )
@@ -150,6 +153,8 @@ def test_terminal_batch_fields_are_literal_and_control_free(formatter, payload, 
     rendered = formatter([entry])
 
     assert expected in rendered
+    if payload.endswith("\\"):
+        assert payload + "\\" not in rendered
     assert "90/100" in rendered
     assert "CRITICAL" in rendered
     assert not any(character in rendered for character in ("\x1b", "\x00", "\r", "\u202e"))
@@ -157,9 +162,11 @@ def test_terminal_batch_fields_are_literal_and_control_free(formatter, payload, 
 
 def test_terminal_batch_breakdown_fields_are_literal():
     entries = [
-        {"skill": {"name": "one", "source_group": "[/bad]", "language": "[bold]x[/bold]"}},
+        {"skill": {"name": "one", "source_group": "[/bad]\\", "language": "[bold]x[/bold]\\"}},
         {"skill": {"name": "two", "source_group": "other", "language": "en"}},
     ]
     rendered = _format_terminal(entries)
     assert "[/bad]" in rendered
     assert "[bold]x[/bold]" in rendered
+    assert "[/bad]\\\\" not in rendered
+    assert "[bold]x[/bold]\\\\" not in rendered
