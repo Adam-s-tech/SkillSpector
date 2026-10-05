@@ -449,6 +449,10 @@ claude mcp add skillspector -- skillspector mcp
 > - Local paths and `file://` URLs are **automatically rejected** over HTTP to
 >   prevent unauthenticated callers from reading arbitrary host files. Only
 >   remote Git and `.zip` URLs are accepted.
+>
+> HTTP Git scans accept only credential-free `https://` targets and never use
+> the server's Git login. Use stdio or the CLI for private repositories.
+> Redirects are rejected; use the current repository URL after a rename or transfer.
 
 ## Vulnerability Patterns
 

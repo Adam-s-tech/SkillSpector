@@ -17,6 +17,7 @@
 
 import ctypes
 import os
+import subprocess
 import sys
 from errno import ENOENT
 from pathlib import Path, PurePosixPath
@@ -718,8 +719,19 @@ def test_anonymous_git_drops_ambient_auth_and_config(
         "GITHUB_TOKEN": "synthetic-token",
         "CURL_HOME": str(tmp_path),
         "SSLKEYLOGFILE": str(tmp_path / "tls-keys"),
+        "GIT_SSL_CERT": "/synthetic/client.pem",
+        "GIT_SSL_KEY": "/synthetic/client.key",
+        "GIT_CEILING_DIRECTORIES": "/synthetic/ceiling",
     }
-    for key, value in hostile.items():
+    transport = {
+        key: "/synthetic/ca" if "CA" in key or key.startswith("SSL_") else "http://proxy.example:8080"
+        for key in (
+            "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy",
+            "NO_PROXY", "no_proxy", "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "SSL_CERT_FILE",
+            "SSL_CERT_DIR", "CURL_CA_BUNDLE",
+        )
+    }
+    for key, value in (hostile | transport).items():
         monkeypatch.setenv(key, value)
     handler = InputHandler(allow_git_credentials=False)
     calls: list[tuple[list[str], dict]] = []
@@ -755,9 +767,11 @@ def test_anonymous_git_drops_ambient_auth_and_config(
         assert env["GIT_CONFIG_GLOBAL"] == env["GIT_CONFIG_SYSTEM"] == os.devnull
         assert env["GIT_CONFIG_NOSYSTEM"] == "1"
         assert env["GIT_ALLOW_PROTOCOL"] == "https"
+        assert env["GIT_CEILING_DIRECTORIES"] == str(isolated_home.parent)
+        assert {key: env[key] for key in transport} == transport
         assert env["GIT_TERMINAL_PROMPT"] == "0"
         assert list(isolated_home.iterdir()) == []
-        for key in hostile.keys() - {"HOME", "GIT_CONFIG_GLOBAL"}:
+        for key in hostile.keys() - {"HOME", "GIT_CONFIG_GLOBAL", "GIT_CEILING_DIRECTORIES"}:
             assert key not in env
         assert os.environ["HOME"] == str(tmp_path)
     finally:
@@ -784,3 +798,54 @@ def test_anonymous_git_rejects_auth_targets_before_start(operation: str, target:
     popen.assert_not_called()
     run.assert_not_called()
     assert handler.temp_dir_for_cleanup() is None
+
+
+@pytest.mark.parametrize("operation", ["_clone_git", "_list_remote_refs"])
+@pytest.mark.parametrize(
+    "target, expected",
+    [
+        ("https://gitlab.com/group/subgroup/repo", "https://gitlab.com/group/subgroup/repo.git"),
+        ("https://gitlab.com/group/repo.git/", "https://gitlab.com/group/repo.git"),
+        ("https://bitbucket.org/team/repo/", "https://bitbucket.org/team/repo.git"),
+        ("https://github.com/org/repo", "https://github.com/org/repo"),
+    ],
+)
+def test_anonymous_git_normalizes_repository_urls_without_redirects(operation, target, expected):
+    handler = InputHandler(allow_git_credentials=False)
+    calls = []
+
+    def fake_git(command, **kwargs):
+        calls.append(command)
+        if "clone" in command:
+            Path(command[-1]).mkdir(parents=True)
+        return SimpleNamespace(poll=lambda: 0, returncode=0, stdout=b"abc\trefs/heads/main\n")
+
+    try:
+        with (
+            patch.object(handler, "_validate_url_host"),
+            patch("skillspector.input_handler.subprocess.Popen", side_effect=fake_git),
+            patch("skillspector.input_handler.subprocess.run", side_effect=fake_git),
+        ):
+            getattr(handler, operation)(target)
+        assert expected in calls[0]
+        assert "http.followRedirects=false" in calls[0]
+    finally:
+        handler.cleanup()
+
+
+def test_anonymous_git_cannot_read_enclosing_repository_config(tmp_path):
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "http.https://github.com/.extraheader", "synthetic-header"],
+        check=True,
+    )
+    handler = InputHandler(allow_git_credentials=False)
+    with patch.object(handler, "_get_temp_dir", return_value=tmp_path / "scan"):
+        (tmp_path / "scan").mkdir()
+        argv, env, _ = handler._git_invocation("https://github.com/org/repo")
+    result = subprocess.run(
+        [*argv, "config", "--get-urlmatch", "http.extraheader", "https://github.com/org/repo"],
+        env=env, capture_output=True, check=False,
+    )
+    assert b"synthetic-header" not in result.stdout
+    assert result.stdout.strip() == b""
