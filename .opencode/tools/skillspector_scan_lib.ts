@@ -61,53 +61,44 @@ export function redact(text: string, env: Env = process.env): string {
   const credentialPattern = valuePatterns.length
     ? new RegExp(`(?=(${valuePatterns.join("|")}))`, "g")
     : undefined
+  // A full configured credential can act as the separator before another key.
+  // Match on the original text so overlapping values never split that key.
+  // Short values cannot end here unless their existing token boundary allows it.
+  const longValues = valuePatterns.filter((_, index) => credentialValues[index].length >= 4)
+  const keyBoundary = longValues.length ? `(?:\\b|(?<=${longValues.join("|")}))` : "\\b"
   const keyPattern = new RegExp([
     "sk-ant-[A-Za-z0-9_-]+",
-    "\\bsk-[A-Za-z0-9_-]{6,}\\b",
-    /\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY|INFERENCE_KEY)\s*[:=]\s*["']?)[^"'\s,}]+/.source,
+    `${keyBoundary}sk-[A-Za-z0-9_-]{6,}\\b`,
+    keyBoundary + /([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY|INFERENCE_KEY)\s*[:=]\s*["']?)[^"'\s,}]+/.source,
   ].join("|"), "g")
   const scrub = (value: string): string => {
-    function* spans(
-      pattern: RegExp | undefined, literal: boolean, source = value,
-    ): Generator<[number, number]> {
+    function* spans(pattern: RegExp | undefined, literal: boolean): Generator<[number, number]> {
       if (!pattern) return
-      for (const match of source.matchAll(pattern)) {
+      for (const match of value.matchAll(pattern)) {
         const start = match.index + (literal ? 0 : (match[1]?.length ?? 0))
         const end = match.index + (literal ? match[1].length : match[0].length)
         yield [start, end]
       }
     }
-    // Mask configured values without changing offsets. This also reveals a
-    // key boundary when an unrelated credential immediately follows one.
-    const maskedParts: string[] = []
-    let maskedUntil = 0
-    for (const [start, end] of spans(credentialPattern, true)) {
-      if (end <= maskedUntil) continue
-      if (start > maskedUntil) maskedParts.push(value.slice(maskedUntil, start))
-      maskedParts.push(" ".repeat(end - Math.max(start, maskedUntil)))
-      maskedUntil = end
-    }
-    maskedParts.push(value.slice(maskedUntil))
-    const streams = [
-      spans(credentialPattern, true),
-      spans(keyPattern, false),
-    ]
-    if (maskedUntil) streams.push(spans(keyPattern, false, maskedParts.join("")))
-    const pending = streams.map((stream) => stream.next().value)
+    const known = spans(credentialPattern, true)
+    const shaped = spans(keyPattern, false)
+    let nextKnown = known.next().value
+    let nextShaped = shaped.next().value
     let cursor = 0
     let start = -1
     let end = -1
     const parts: string[] = []
-    // Merge at most three ordered span streams in linear time. A shorter key/assignment
+    // Merge two ordered span streams in linear time. A shorter key/assignment
     // match cannot expose the tail of a longer configured credential.
-    while (true) {
-      let first = -1
-      for (let index = 0; index < pending.length; index++) {
-        if (pending[index] && (first < 0 || pending[index][0] < pending[first][0])) first = index
+    while (nextKnown || nextShaped) {
+      let span: [number, number]
+      if (nextKnown && (!nextShaped || nextKnown[0] <= nextShaped[0])) {
+        span = nextKnown
+        nextKnown = known.next().value
+      } else {
+        span = nextShaped!
+        nextShaped = shaped.next().value
       }
-      if (first < 0) break
-      const span = pending[first]!
-      pending[first] = streams[first].next().value
       if (span[0] > end) {
         if (start >= 0) {
           parts.push(value.slice(cursor, start), "[REDACTED]")
