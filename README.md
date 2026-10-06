@@ -291,6 +291,7 @@ inference gateways.
 | `anthropic_proxy` | `ANTHROPIC_PROXY_API_KEY` + `ANTHROPIC_PROXY_ENDPOINT_URL` | Any Vertex-style raw-predict proxy | `claude-sonnet-4-6` |
 | `bedrock` | `AWS_PROFILE` (optional) + `AWS_REGION` — SigV4 via boto3 | AWS Bedrock Runtime | `us.anthropic.claude-sonnet-4-6-20250915-v1:0` |
 | `nv_build` | `NVIDIA_INFERENCE_KEY` | build.nvidia.com | `z-ai/glm-5.2` |
+| `gemini` | `GOOGLE_CLOUD_PROJECT` (+ optional `GOOGLE_CLOUD_LOCATION`) via ADC | Google Cloud OpenAI-compatible Gemini endpoint | `gemini-3.8-flash` |
 | `ollama` | _(none)_ | `OLLAMA_BASE_URL` (default `http://localhost:11434/v1`) | `llama3.1:8b` |
 | `azure_openai` | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` | Azure OpenAI Service | `gpt-4o` (deployment defaults to the model label) |
 | `openai_compatible` | `SKILLSPECTOR_COMPAT_API_KEY` + `SKILLSPECTOR_COMPAT_BASE_URL` | Any OpenAI-compatible endpoint | `llama-3.1-70b-versatile` |
@@ -352,6 +353,31 @@ export SKILLSPECTOR_PROVIDER=nv_build
 export NVIDIA_INFERENCE_KEY=nvapi-...
 skillspector scan ./my-skill/
 
+# Gemini on Google Cloud (Application Default Credentials / Workload Identity)
+# Prerequisites:
+#   1. Google Cloud project with billing enabled.
+#   2. Enable Gemini Enterprise Agent Platform / Vertex AI API: `aiplatform.googleapis.com`.
+#   3. IAM permission: grant `roles/aiplatform.user` (or at minimum `aiplatform.endpoints.predict`)
+#      to your user account or Kubernetes service account.
+#   4. Local authentication: run `gcloud auth application-default login`.
+#      Configure a quota project if needed: `gcloud auth application-default set-quota-project PROJECT_ID`.
+#   5. Kubernetes / GKE: configure Workload Identity and leave GOOGLE_APPLICATION_CREDENTIALS unset
+#      rather than exporting service account keys.
+# Note on Data Residency:
+#   The default `global` endpoint does not support data-residency requirements. While you can target
+#   `us`, `eu`, or regional endpoints (e.g. `us-central1`), endpoint selection alone does not guarantee
+#   data residency or in-region processing without appropriate organizational policies. Always verify
+#   that your selected model is supported in your target location.
+# Optional credentials:
+#   GOOGLE_APPLICATION_CREDENTIALS is optional and can reference Workload or Workforce Identity Federation
+#   configuration files; exporting long-lived service account keys is discouraged.
+export SKILLSPECTOR_PROVIDER=gemini
+export GOOGLE_CLOUD_PROJECT=my-project-id
+# export GOOGLE_CLOUD_LOCATION=global  # default is global; or us, eu, or specific region (e.g. us-central1)
+# Default model: gemini-3.8-flash
+# export SKILLSPECTOR_MODEL=gemini-3.7-flash
+skillspector scan ./my-skill/
+
 # Local Claude CLI — no API key; uses your existing `claude auth login` session
 # Requires: claude CLI installed and authenticated (claude auth login)
 export SKILLSPECTOR_PROVIDER=claude_cli
@@ -402,8 +428,8 @@ skillspector scan ./my-skill/ --no-llm
 ### MCP Server
 
 Run SkillSpector as a [Model Context Protocol](https://modelcontextprotocol.io)
-server so any MCP-capable agent (Claude Code, Codex CLI, Gemini CLI) or remote
-runtime can call scanning as a tool and **gate skill/MCP installs on the
+server so local MCP-capable agents (Claude Code, Codex CLI, Gemini CLI)
+can call scanning as a tool and **gate skill/MCP installs on the
 result** — turning SkillSpector into a runtime guardrail instead of an
 out-of-band audit step.
 
@@ -416,7 +442,7 @@ uv tool install --force 'skillspector[mcp] @ git+https://github.com/NVIDIA/skill
 # FastMCP stdio transport for local CLI agents
 skillspector mcp
 
-# streamable HTTP/SSE transport for remote / A2A callers
+# Streamable HTTP transport on a local loopback interface
 skillspector mcp --transport http --host 127.0.0.1 --port 8000
 ```
 
@@ -441,11 +467,12 @@ claude mcp add skillspector -- skillspector mcp
 > **Security — HTTP transport trust model**
 >
 > The HTTP transport ships **without authentication**. Any caller that can
-> reach the port can invoke `scan_skill`. Over stdio or `127.0.0.1` this is
-> the same trust boundary as the CLI. If you bind to a routable interface:
+> reach the port can invoke `scan_skill`. HTTP bindings are restricted to
+> loopback IPs (`127.0.0.1` or `::1`); `localhost` binds to `127.0.0.1` without
+> DNS resolution. Wildcard, routable and other hostname bindings are rejected.
 >
-> - Sit the server behind an authenticating reverse proxy (e.g. nginx + mTLS)
->   before exposing it externally.
+> - For remote access, put an authenticating reverse proxy (e.g. nginx + mTLS)
+>   in front of the loopback listener.
 > - Local paths and `file://` URLs are **automatically rejected** over HTTP to
 >   prevent unauthenticated callers from reading arbitrary host files. Only
 >   remote Git and `.zip` URLs are accepted.
@@ -679,7 +706,10 @@ Issues (2)
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `SKILLSPECTOR_PROVIDER` | Active LLM provider: `openai`, `anthropic`, `anthropic_proxy`, `bedrock`, `nv_build`, `ollama`, `azure_openai`, `openai_compatible`, `claude_cli`, `codex_cli`, `gemini_cli`, or `opencode_cli`. Hosted providers use bundled `model_registry.yaml` defaults; CLI providers fall back to the local runtime's default model unless `SKILLSPECTOR_MODEL` is set. Defaults to `nv_build`. | Optional |
+| `SKILLSPECTOR_PROVIDER` | Active LLM provider: `openai`, `anthropic`, `anthropic_proxy`, `bedrock`, `nv_build`, `gemini`, `ollama`, `azure_openai`, `openai_compatible`, `claude_cli`, `codex_cli`, `gemini_cli`, or `opencode_cli`. Hosted providers use bundled `model_registry.yaml` defaults; CLI providers fall back to the local runtime's default model unless `SKILLSPECTOR_MODEL` is set. Defaults to `nv_build`. | Optional |
+| `GOOGLE_CLOUD_PROJECT` | Google Cloud project ID for the `gemini` provider. Authenticates via Google Cloud Application Default Credentials (ADC) or GKE Workload Identity. | Required for LLM analysis when `SKILLSPECTOR_PROVIDER=gemini` |
+| `GOOGLE_CLOUD_LOCATION` | Google Cloud location for the `gemini` provider endpoint (e.g. `global`, `us`, `eu`, `us-central1`). Defaults to `global`. | Optional (used when `SKILLSPECTOR_PROVIDER=gemini`) |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Optional path to ADC credential/config file (e.g. Workload or Workforce Identity Federation config; exported service account keys are discouraged). For local development, use `gcloud auth application-default login`; for GKE, use Workload Identity. | Optional (used when `SKILLSPECTOR_PROVIDER=gemini`) |
 | `NVIDIA_INFERENCE_KEY` | Credential for the `nv_build` provider (build.nvidia.com). | Required for LLM analysis when `SKILLSPECTOR_PROVIDER=nv_build` |
 | `OPENAI_API_KEY` | Credential for the OpenAI provider (`SKILLSPECTOR_PROVIDER=openai`). Also serves as the tier-2 fallback in the credential waterfall when the active provider returns no credentials. | Required for LLM analysis when `SKILLSPECTOR_PROVIDER=openai` |
 | `OPENAI_BASE_URL` | Override the OpenAI endpoint (e.g. point at Ollama). | Optional |
@@ -880,9 +910,12 @@ files are scanned normally.
 
 ### Stage 2: LLM Semantic Analysis (Optional)
 - Evaluates context and intent
-- Filters false positives
-- Provides human-readable explanations
-- Improves precision to ~87%
+- Confirmed findings may gain an explanation and higher confidence, never lower
+- Every deterministic finding stays in the report whether the model confirms it, disputes it, or does not address it
+- Findings the model reviews but does not confirm (disputed, low-confidence, or unaddressed) are tagged `llm-unconfirmed` in JSON and SARIF output
+- Findings whose review fails are kept without that tag; `evidence.llm_review_outcome` distinguishes `confirmed`, `disagreed`, `low-confidence`, `missing`, and `failed` in JSON and SARIF output
+- Results depend on the configured model and prompt context; Stage 2 does not replace
+  deterministic findings or guarantee a particular precision rate
 
 The LLM prompt includes anti-jailbreak protections to prevent malicious skills from manipulating the analysis.
 
