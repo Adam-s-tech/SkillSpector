@@ -477,9 +477,11 @@ claude mcp add skillspector -- skillspector mcp
 >   prevent unauthenticated callers from reading arbitrary host files. Only
 >   remote Git and `.zip` URLs are accepted.
 >
-> HTTP Git scans accept only credential-free `https://` targets and never use
-> the server's Git login. Use stdio or the CLI for private repositories.
-> Redirects are rejected; use the current repository URL after a rename or transfer.
+> HTTP scans accept only credential-free `https://` targets. Git scans never use
+> the server's Git login or Git config. If a proxy or custom CA is needed, set
+> `HTTPS_PROXY`, `NO_PROXY` or `GIT_SSL_CAINFO` in the server environment.
+> Use stdio or the CLI for private repositories. Git redirects are rejected;
+> use the current repository URL after a rename or transfer.
 
 ## Vulnerability Patterns
 
