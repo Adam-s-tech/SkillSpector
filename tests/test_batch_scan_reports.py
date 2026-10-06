@@ -34,6 +34,28 @@ def test_json_marks_error_entries_as_unsuccessful() -> None:
     assert payload["skills"][0]["execution_successful"] is False
 
 
+@pytest.mark.parametrize("failed_language", ["auto", "unknown", None, "zh"])
+def test_failed_scans_do_not_count_as_detected_languages(failed_language) -> None:
+    entries = [
+        {"skill": {"name": "english", "language": "en"}},
+        {"skill": {"name": "chinese", "language": "zh"}},
+        {
+            "skill": {"name": "failed", "language": failed_language},
+            "error": "scan timed out",
+        },
+    ]
+    original = deepcopy(entries)
+
+    payload = json.loads(_format_json(entries))
+
+    assert payload["batch"]["enhancements"]["languages_detected"] == {"zh": 1}
+    assert len(payload["skills"]) == 3
+    assert payload["skills"][-1]["execution_successful"] is False
+    for formatter in (_format_terminal, _format_markdown):
+        assert "1 non-English skill(s)" in formatter(entries)
+    assert entries == original
+
+
 @pytest.mark.parametrize(
     "payload",
     [

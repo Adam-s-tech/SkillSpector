@@ -88,6 +88,16 @@ def _exception_groups(results: list[dict[str, object]]) -> list[tuple[str, list[
 # ═══════════════════════════════════════════════════════════════════
 
 
+def _language_counts(results: list[dict[str, object]]) -> dict[str, int]:
+    """Count detected languages only for scans that produced a usable result."""
+    counts: dict[str, int] = defaultdict(int)
+    for result in results:
+        language = result.get("skill", {}).get("language", "en")
+        if "error" not in result and language not in (None, "", "auto", "unknown"):
+            counts[language] += 1
+    return counts
+
+
 def _format_terminal(results: list[dict[str, object]]) -> str:
     try:
         from rich.console import Console
@@ -109,7 +119,7 @@ def _format_terminal(results: list[dict[str, object]]) -> str:
     completed = total - errs
 
     # ── Enhancement summary (for multilingual-enhanced mode) ────
-    non_en = sum(1 for r in results if r.get("skill", {}).get("language", "en") != "en")
+    non_en = sum(count for lang, count in _language_counts(results).items() if lang != "en")
     gap_fill_total = sum(
         r.get("enhancements", {}).get("gap_fill_findings", 0) for r in results
     )
@@ -272,13 +282,7 @@ def _print_source_breakdown(c, results: list[dict[str, object]]) -> None:
 def _print_language_breakdown(c, results: list[dict[str, object]]) -> None:
     from rich.text import Text
 
-    lang_stats: dict[str, int] = defaultdict(int)
-    lang_non_en: set[str] = set()
-    for r in results:
-        lang = r.get("skill", {}).get("language", "en")
-        lang_stats[lang] = lang_stats.get(lang, 0) + 1
-        if lang != "en":
-            lang_non_en.add(lang)
+    lang_stats = _language_counts(results)
 
     if len(lang_stats) > 1:
         c.print("[bold]Language Breakdown:[/bold]")
@@ -348,13 +352,10 @@ def _format_json(results: list[dict[str, object]]) -> str:
         entries.append(entry)
 
     # Aggregate enhancement stats for the batch envelope
-    non_en_langs: set[str] = set()
+    languages = _language_counts(results)
     gap_fill_total = 0
     gap_fill_skills = 0
     for r in results:
-        lang = r.get("skill", {}).get("language", "en")
-        if lang != "en":
-            non_en_langs.add(lang)
         enhancements = r.get("enhancements", {})
         gap_fill_total += enhancements.get("gap_fill_findings", 0)
         if enhancements.get("gap_fill_applied"):
@@ -367,10 +368,9 @@ def _format_json(results: list[dict[str, object]]) -> str:
             "scan_mode": "multilingual-enhanced",
             "enhancements": {
                 "language_detection": "unicode-script-ratio",
-                "languages_detected": {lang: sum(
-                    1 for r in results
-                    if r.get("skill", {}).get("language") == lang
-                ) for lang in sorted(non_en_langs)},
+                "languages_detected": {
+                    lang: languages[lang] for lang in sorted(languages) if lang != "en"
+                },
                 "gap_fill_applied": gap_fill_skills,
                 "gap_fill_findings": gap_fill_total,
             },
@@ -394,7 +394,7 @@ def _format_markdown(results: list[dict[str, object]]) -> str:
     total = len(results)
 
     # ── Enhancement summary ─────────────────────────────────────
-    non_en = sum(1 for r in results if r.get("skill", {}).get("language", "en") != "en")
+    non_en = sum(count for lang, count in _language_counts(results).items() if lang != "en")
     gap_fill_total = sum(
         r.get("enhancements", {}).get("gap_fill_findings", 0) for r in results
     )
