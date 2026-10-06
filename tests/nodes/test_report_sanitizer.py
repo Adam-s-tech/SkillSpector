@@ -151,8 +151,6 @@ def test_report_sanitizes_llm_message_copied_to_pattern(fmt: str) -> None:
 
     result = report(state)
     rendered = result["report_body"]
-    if fmt == "markdown":
-        rendered = MarkdownIt().enable("table").render(rendered)
     serialized_findings = json.dumps([item.to_dict() for item in result["filtered_findings"]])
     assert "\x1b" not in rendered
     assert "secret" not in rendered
