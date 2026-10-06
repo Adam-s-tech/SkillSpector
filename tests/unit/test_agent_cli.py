@@ -284,6 +284,9 @@ class TestScrubEnv:
         runtime = {
             "PATH": "/usr/bin",
             "HOME": "/home/operator",
+            "USER": "operator",
+            "LOGNAME": "operator",
+            "USERNAME": "operator",
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
             "TERM": "dumb",
@@ -325,6 +328,10 @@ class TestScrubEnv:
             ),
             "synthetic-secret",
         )
+        if sys.platform == "win32":
+            # Windows os.environ uppercases names and collapses case aliases.
+            runtime = {key.upper(): value for key, value in runtime.items()}
+            secrets = {key.upper(): value for key, value in secrets.items()}
         original = runtime | secrets
         with patch.dict(_agent_cli.os.environ, original, clear=True):
             assert _scrub_env() == runtime
