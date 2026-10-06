@@ -141,6 +141,7 @@ def _main_impl() -> None:
     try:
         from rich.console import Console
         from rich.markup import escape
+        from rich.text import Text
     except ImportError:
         Console = None  # type: ignore[assignment]  # noqa: N806
 
@@ -327,12 +328,17 @@ def _main_impl() -> None:
             with _print_lock:
                 # Non-English LLM guard warning
                 if lang != "en" and not use_llm and args.require_llm:
+                    warning = (
+                        f"non-English skill '{_terminal_text(rel_name)}' "
+                        f"({_terminal_text(lang)}) scanned with --no-llm. "
+                        "Static pattern recall is reduced for this language. "
+                        "Re-run without --no-llm for full coverage, or use "
+                        "--no-require-llm to suppress this warning."
+                    )
                     _print(
-                        f"[yellow]WARNING:[/yellow] non-English skill "
-                        f"'{display(rel_name)}' ({display(lang)}) scanned with --no-llm. "
-                        f"Static pattern recall is reduced for this language. "
-                        f"Re-run without --no-llm for full coverage, or use "
-                        f"--no-require-llm to suppress this warning.",
+                        Text.assemble(("WARNING:", "yellow"), " ", warning)
+                        if c
+                        else f"WARNING: {warning}",
                         file=sys.stderr,
                     )
 

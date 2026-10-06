@@ -188,10 +188,20 @@ def test_runner_cleans_up_with_optional_gap_fill(
         assert entry["risk_assessment"]["severity"] == "ERROR"
 
 
+@pytest.mark.parametrize("rich_available", [True, False])
+@pytest.mark.parametrize("skill_name", ["safe-skill", "x\\"])
 def test_cli_warns_using_detected_language(
-    batch_skill, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    batch_skill,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    rich_available: bool,
+    skill_name: str,
 ) -> None:
     skill, _ = batch_skill
+    if skill.name != skill_name:
+        skill = skill.rename(skill.with_name(skill_name))
+    if not rich_available:
+        monkeypatch.setitem(sys.modules, "rich.console", None)
     observed = _mock_scan(monkeypatch)
     monkeypatch.setattr(batch_scan, "create_api_key_pool_from_env", lambda: None)
     monkeypatch.setattr(
@@ -205,7 +215,7 @@ def test_cli_warns_using_detected_language(
     output = capsys.readouterr()
     output_text = " ".join((output.out + output.err).split())
     assert "WARNING:" in output_text
-    assert "(zh) scanned with --no-llm." in output_text
+    assert f"skill '{skill_name}' (zh) scanned with --no-llm." in output_text
     assert observed["calls"] == []
 
 
