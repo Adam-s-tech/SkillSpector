@@ -298,7 +298,9 @@ def _successful_scan_process(skill_dir, root, result_path, options, started):
     if os.name == "posix":
         os.setsid()
     started.set()
-    result_path.write_text(json.dumps([{"skill": {"name": skill_dir.name}}, None, skill_dir.name]))
+    result_path.write_text(
+        json.dumps([{"skill": {"name": skill_dir.name, "language": "en"}}, None, skill_dir.name])
+    )
 
 
 def test_worker_timeout_kills_scan_and_releases_pool_capacity(tmp_path, monkeypatch):
@@ -394,6 +396,8 @@ def _mixed_scan_process(skill_dir, root, result_path, options, started):
         batch_scan._scan_skill = _stalled_scan
     elif skill_dir.name == "crashed":
         os._exit(7)
+    else:
+        return _successful_scan_process(skill_dir, root, result_path, options, started)
     batch_scan._scan_skill_process(skill_dir, root, result_path, options, started)
 
 
@@ -440,6 +444,8 @@ def test_cli_reports_failed_workers_with_completed_skills(tmp_path, monkeypatch,
     )
     assert expected in entries[failed_name]["error"]
     assert entries[failed_name]["execution_successful"] is False
+    assert entries[failed_name]["skill"]["language"] == "unknown"
+    assert report["batch"]["enhancements"]["languages_detected"] == {}
     assert not entries["normal"].get("error")
 
 
@@ -456,7 +462,8 @@ def test_worker_stops_descendants_when_supervisor_dies(tmp_path):
     supervisor.start()
     try:
         marker = tmp_path / "started.json"
-        deadline = time.monotonic() + 25
+        # Two spawned interpreters may each need the production startup budget.
+        deadline = time.monotonic() + 180
         while not marker.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         assert marker.exists(), "worker did not start"
@@ -472,6 +479,47 @@ def test_worker_stops_descendants_when_supervisor_dies(tmp_path):
             supervisor.kill()
         supervisor.join(5)
         supervisor.close()
+
+
+def _abandoned_pool_supervisor(skill_dir):
+    manager = batch_scan._PoolManager(ctx=multiprocessing.get_context("spawn"))
+    manager.start(batch_scan._start_parent_watch)
+    pool = manager.create_pool()
+    assert pool.snapshot()["keys_configured"] == 2
+    (skill_dir / "manager.json").write_text(json.dumps(manager._process.pid))
+    time.sleep(120)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX supervisor kill")
+def test_api_pool_manager_stops_when_supervisor_dies(tmp_path, monkeypatch):
+    monkeypatch.setenv("SKILLSPECTOR_API_KEYS", "synthetic-a;synthetic-b")
+    supervisor = multiprocessing.get_context("spawn").Process(
+        target=_abandoned_pool_supervisor, args=(tmp_path,)
+    )
+    supervisor.start()
+    manager_pid = None
+    try:
+        marker = tmp_path / "manager.json"
+        deadline = time.monotonic() + 180
+        while not marker.exists() and time.monotonic() < deadline and supervisor.is_alive():
+            time.sleep(0.05)
+        assert marker.exists(), "API pool manager did not start"
+        manager_pid = json.loads(marker.read_text())
+        supervisor.kill()
+        supervisor.join(5)
+        assert not supervisor.is_alive()
+        _assert_process_stopped(manager_pid)
+        manager_pid = None
+    finally:
+        if supervisor.is_alive():
+            supervisor.kill()
+        supervisor.join(5)
+        supervisor.close()
+        if manager_pid is not None:
+            try:
+                os.kill(manager_pid, 9)
+            except ProcessLookupError:
+                pass
 
 
 def test_scan_forwards_verbose_logging(batch_skill, monkeypatch):

@@ -162,15 +162,22 @@ def _kill_worker_group(pid: int) -> None:
             pass
 
 
-def _watch_parent(scratch: Path) -> None:
+def _watch_parent(scratch: Path | None = None) -> None:
     parent = multiprocessing.parent_process()
     if parent is None:
         return
     wait([parent.sentinel])
-    # A dead supervisor cannot clean its scratch or stop detached descendants.
-    shutil.rmtree(scratch, ignore_errors=True)
-    _kill_worker_group(os.getpid())
-    os._exit(1)
+    if scratch is not None:
+        # A dead supervisor cannot clean its scratch or stop the worker group.
+        shutil.rmtree(scratch, ignore_errors=True)
+        _kill_worker_group(os.getpid())
+    # The pool manager has no worker group, but must not retain API keys after
+    # its supervisor disappears.
+    os._exit(0)
+
+
+def _start_parent_watch(scratch: Path | None = None) -> None:
+    threading.Thread(target=_watch_parent, args=(scratch,), daemon=True).start()
 
 
 def _scan_skill_process(
@@ -178,7 +185,7 @@ def _scan_skill_process(
 ) -> None:
     if os.name == "posix":
         os.setsid()
-    threading.Thread(target=_watch_parent, args=(result_path.parent,), daemon=True).start()
+    _start_parent_watch(result_path.parent)
     # A killed worker cannot run finally blocks. Its supervisor owns all scratch.
     tempfile.tempdir = str(result_path.parent)
     for name in ("TMPDIR", "TEMP", "TMP"):
@@ -410,9 +417,9 @@ def _main_impl() -> None:
     pool_snapshot = None
     with ExitStack() as cleanup, ThreadPoolExecutor(max_workers=args.workers) as executor:
         if api_pool is not None:
-            pool_manager = cleanup.enter_context(
-                _PoolManager(ctx=multiprocessing.get_context("spawn"))
-            )
+            pool_manager = _PoolManager(ctx=multiprocessing.get_context("spawn"))
+            pool_manager.start(_start_parent_watch)
+            cleanup.callback(pool_manager.shutdown)
             api_pool = pool_manager.create_pool()
         future_map = {
             executor.submit(

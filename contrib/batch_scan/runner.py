@@ -799,7 +799,7 @@ def entry_from_error(
             "name": rel_name,
             "source": str(skill_dir),
             "source_group": rel_name.split("/")[0] if "/" in rel_name else ".",
-            "language": detected_language,
+            "language": "unknown" if detected_language == "auto" else detected_language,
             "scanned_at": datetime.now(UTC).isoformat(),
         },
         "risk_assessment": {

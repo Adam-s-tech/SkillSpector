@@ -59,6 +59,7 @@ Each worker owns a process group. The supervisor kills that group on timeout,
 reclaims API-pool leases, and removes scratch files. A worker also watches its
 parent's process sentinel so parent termination stops the group and removes its
 scratch. Descendants that deliberately start a new session are outside this group.
+The API-pool manager also watches its parent and exits if the supervisor dies.
 Verbose logging is forwarded explicitly to spawned workers.
 
 ## DeepSeek compatibility patches
@@ -181,7 +182,8 @@ Windows.
 
 ## Per-skill timeout (90s)
 
-A skill that takes >90s is marked TIMEOUT and skipped.  Other workers continue.
+A skill that takes more than 90 seconds of scan time is retained as an ERROR
+entry in the report. Startup has a separate 90-second bound. Other workers continue.
 HTTP-level timeouts (Patch 6) prevent most hangs from reaching the 90s ceiling.
 
 ## Exit codes
@@ -197,7 +199,7 @@ HTTP-level timeouts (Patch 6) prevent most hangs from reaching the 90s ceiling.
 ```
 contrib/batch_scan/
 ├── __init__.py          # package init + dotenv preload
-├── batch_scan.py        # CLI + ThreadPoolExecutor
+├── batch_scan.py        # CLI + supervised scan processes
 ├── runner.py            # graph wrapper + setup_deepseek_compat()
 ├── discovery.py         # SKILL.md finder
 ├── detection.py         # language detection
