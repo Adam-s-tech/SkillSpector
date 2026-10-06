@@ -139,6 +139,25 @@ describe("redact", () => {
     assert.equal(redact("example xyz x", { OPENAI_API_KEY: "x" }), "example xyz [REDACTED]")
   })
 
+  it("redacts unrelated credentials directly after a configured value", () => {
+    const env = { NVIDIA_INFERENCE_KEY: "nvapi-ABCD1234efgh" }
+    for (const [tail, expected] of [
+      ["sk-abcdef123456", "[REDACTED]"],
+      ["sk-ant-abcdef123456", "[REDACTED]"],
+      ["OPENAI_API_KEY=second-secret", "[REDACTED]OPENAI_API_KEY=[REDACTED]"],
+    ]) {
+      const input = env.NVIDIA_INFERENCE_KEY + tail
+      assert.equal(redact(input, env), expected)
+      assert.deepEqual(JSON.parse(redact(JSON.stringify({ code_snippet: input, risk_score: 12 }), env)), {
+        code_snippet: expected,
+        risk_score: 12,
+      })
+    }
+    assert.equal(redact("abcdefsk-abcdef123456", {
+      OPENAI_API_KEY: "abcd", ANTHROPIC_API_KEY: "cdef",
+    }), "[REDACTED]")
+  })
+
   it("ignores empty and unset credentials without matching every output position", () => {
     assert.equal(redact("ordinary output", {
       OPENAI_API_KEY: "",
