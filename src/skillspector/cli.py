@@ -44,7 +44,7 @@ from rich.text import Text
 from rich.tree import Tree
 
 from skillspector import __version__, transitive
-from skillspector.cleanup import cleanup_result
+from skillspector.cleanup import TempDirTracker, cleanup_result
 from skillspector.constants import RISK_THRESHOLD
 from skillspector.graph_proxy import graph
 from skillspector.input_handler import validate_local_input_path
@@ -619,7 +619,7 @@ def scan(
         SKILLSPECTOR_PROVIDER  Active LLM provider: openai | anthropic |
                                anthropic_proxy | bedrock | nv_build |
                                nv_inference | ollama | azure_openai |
-                               openai_compatible | claude_cli |
+                               openai_compatible | gemini | claude_cli |
                                gemini_cli | opencode_cli. Defaults to the NVIDIA path
                                (nv_inference, falling back to nv_build in
                                OSS builds).
@@ -641,6 +641,9 @@ def scan(
           AZURE_OPENAI_ENDPOINT              for azure_openai
         SKILLSPECTOR_COMPAT_API_KEY +
           SKILLSPECTOR_COMPAT_BASE_URL       for openai_compatible
+        GOOGLE_CLOUD_PROJECT [+ GOOGLE_CLOUD_LOCATION]
+                                             for gemini (uses Application
+                                             Default Credentials / Workload Identity)
 
         ollama uses the local Ollama service. claude_cli,
         gemini_cli, and opencode_cli use their CLI's existing local
@@ -712,7 +715,16 @@ def scan(
     if not input_path.startswith(("http://", "https://", "git@")):
         try:
             resolved_path = validate_local_input_path(resolved_path)
-        except ValueError as e:
+            if (
+                output is not None
+                and resolved_path.is_file()
+                and output.exists()
+                and output.samefile(resolved_path)
+            ):
+                raise ValueError(
+                    "--output points to the input file. Choose a different output path."
+                )
+        except (OSError, ValueError) as e:
             err_console.print(f"[red]Error:[/red] {e}")
             raise typer.Exit(code=2) from e
     try:
@@ -1513,8 +1525,13 @@ def _run_graph_scan(
     if initial_inspection_ledger:
         state["inspection_ledger"] = initial_inspection_ledger
     trace_config = _build_trace_config(input_path, format, no_llm)
+    # A scan that raises or is interrupted returns no result for the caller to
+    # clean up, so remove the temp directory resolve_input made here instead.
+    temp_dir_tracker = TempDirTracker()
+    trace_config["callbacks"] = [temp_dir_tracker]
     if not stream_progress:
-        return cast(dict[str, object], graph.invoke(state, config=trace_config))
+        with temp_dir_tracker.removing_on_error():
+            return cast(dict[str, object], graph.invoke(state, config=trace_config))
 
     analyzer_node_ids = _wired_analyzer_node_ids()
     total_analyzers = len(analyzer_node_ids)
@@ -1532,6 +1549,7 @@ def _run_graph_scan(
             console=err_console,
             transient=True,
         ) as progress,
+        temp_dir_tracker.removing_on_error(),
     ):
         warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
         task_id = progress.add_task("Resolving input...", total=total_steps)
@@ -2528,21 +2546,29 @@ def _scan_skill(
         active_visited.add(transitive.canonicalize_source_identity(input_path))
     except ValueError:
         pass
-    return _scan_transitive(
-        initial_result=result,
-        format=format,
-        no_llm=no_llm,
-        max_depth=transitive_depth,
-        transitive_allow_prefix=transitive_allow_prefix,
-        transitive_deny_prefix=transitive_deny_prefix,
-        baseline=baseline,
-        show_suppressed=show_suppressed,
-        visited=active_visited,
-        scan_cache=transitive_cache,
-        yara_dir=yara_dir,
-        traversal=transitive_traversal,
-        source_local_only=source_local_only,
-    )
+    # The root graph has returned, so its tracker no longer guards the root's
+    # temp dir. If the transitive phase is interrupted or raises, nothing is
+    # returned for the caller's cleanup_result, so remove it here. On success
+    # the merged result carries the same temp_dir_for_cleanup for the caller.
+    try:
+        return _scan_transitive(
+            initial_result=result,
+            format=format,
+            no_llm=no_llm,
+            max_depth=transitive_depth,
+            transitive_allow_prefix=transitive_allow_prefix,
+            transitive_deny_prefix=transitive_deny_prefix,
+            baseline=baseline,
+            show_suppressed=show_suppressed,
+            visited=active_visited,
+            scan_cache=transitive_cache,
+            yara_dir=yara_dir,
+            traversal=transitive_traversal,
+            source_local_only=source_local_only,
+        )
+    except BaseException:
+        cleanup_result(result)
+        raise
 
 
 def _multi_skill_public_record_count(result: dict[str, object]) -> int:
@@ -3296,13 +3322,15 @@ def mcp(
         typer.Option(
             "--transport",
             "-t",
-            help="Transport: FastMCP stdio for local CLI agents, http for remote/A2A callers.",
+            help="Transport: FastMCP stdio for local CLI agents, http for loopback HTTP clients.",
             case_sensitive=False,
         ),
     ] = TransportChoice.stdio,
     host: Annotated[
         str,
-        typer.Option("--host", help="Host to bind (http transport only)."),
+        typer.Option(
+            "--host", help="Loopback IP to bind (http transport only; localhost is accepted)."
+        ),
     ] = "127.0.0.1",
     port: Annotated[
         int,
@@ -3313,7 +3341,7 @@ def mcp(
     Run SkillSpector as an MCP server.
 
     Exposes a single tool, ``scan_skill``, so any MCP-capable agent (Claude Code,
-    Codex CLI, Gemini CLI) or remote runtime can scan a skill and gate installs
+    Codex CLI, Gemini CLI) can scan a skill locally and gate installs
     on the verdict.
 
     Requires the optional mcp extra. Reinstall the GitHub tool package with
@@ -3328,7 +3356,7 @@ def mcp(
         from skillspector.mcp_server import run as run_mcp
 
         run_mcp(transport=transport.value, host=host, port=port)
-    except ModuleNotFoundError as e:
+    except (ModuleNotFoundError, ValueError) as e:
         err_console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(code=2) from e
 
