@@ -69,15 +69,26 @@ export function redact(text: string, env: Env = process.env): string {
   const keyPattern = new RegExp([
     "sk-ant-[A-Za-z0-9_-]+",
     `${keyBoundary}sk-[A-Za-z0-9_-]{6,}\\b`,
-    keyBoundary + /([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY|INFERENCE_KEY)\s*[:=]\s*["']?)[^"'\s,}]+/.source,
+    // Consume each uppercase name once, even when it is not an assignment.
+    // Otherwise a known value like AAAA permits a costly retry at every A.
+    `${keyBoundary}([A-Z][A-Z0-9_]*)`,
   ].join("|"), "g")
+  const assignmentName = /[A-Z0-9_](?:API_KEY|TOKEN|ACCESS_KEY_ID|SECRET_ACCESS_KEY|INFERENCE_KEY)$/
+  const assignmentValue = /(\s*[:=]\s*["']?)[^"'\s,}]+/y
   const scrub = (value: string): string => {
     function* spans(pattern: RegExp | undefined, literal: boolean): Generator<[number, number]> {
       if (!pattern) return
       for (const match of value.matchAll(pattern)) {
-        const start = match.index + (literal ? 0 : (match[1]?.length ?? 0))
-        const end = match.index + (literal ? match[1].length : match[0].length)
-        yield [start, end]
+        if (!literal && match[1]) {
+          if (!assignmentName.test(match[1])) continue
+          assignmentValue.lastIndex = match.index + match[0].length
+          const assigned = assignmentValue.exec(value)
+          if (assigned) {
+            yield [assigned.index + assigned[1].length, assigned.index + assigned[0].length]
+          }
+        } else {
+          yield [match.index, match.index + (literal ? match[1].length : match[0].length)]
+        }
       }
     }
     const known = spans(credentialPattern, true)

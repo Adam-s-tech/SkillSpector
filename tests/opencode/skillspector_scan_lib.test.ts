@@ -156,6 +156,21 @@ describe("redact", () => {
     assert.equal(redact("abcdefsk-abcdef123456", {
       OPENAI_API_KEY: "abcd", ANTHROPIC_API_KEY: "cdef",
     }), "[REDACTED]")
+    for (const prefix of ["AAAA", "lowercase", "0000", "-_._"]) {
+      assert.equal(redact(`${prefix}OPENAI_API_KEY=second-secret`, {
+        NVIDIA_INFERENCE_KEY: prefix,
+      }), "[REDACTED]OPENAI_API_KEY=[REDACTED]")
+    }
+    assert.equal(redact("abcdefOPENAI_API_KEY=abcdef", {
+      OPENAI_API_KEY: "abcd", ANTHROPIC_API_KEY: "cdef",
+    }), "[REDACTED]OPENAI_API_KEY=[REDACTED]")
+  })
+
+  it("bounds assignment scanning with many overlapping credential boundaries", () => {
+    const input = "A".repeat(128 * 1024) + "!"
+    const started = performance.now()
+    assert.equal(redact(input, { OPENAI_API_KEY: "AAAA" }), "[REDACTED]!")
+    assert.ok(performance.now() - started < 2000, "redaction repeatedly rescanned an uppercase run")
   })
 
   it("ignores empty and unset credentials without matching every output position", () => {
